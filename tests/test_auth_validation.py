@@ -1,5 +1,5 @@
 from backend.app import create_app
-from backend.app.config import Config
+from backend.app.config import Config, _jwt_secret
 from backend.app.database import configure_dns_resolver
 from backend.app.routes import auth
 import dns.resolver
@@ -8,6 +8,26 @@ from pymongo.errors import ConfigurationError
 
 class MissingJwtConfig(Config):
     JWT_SECRET = ""
+
+
+def test_jwt_secret_derives_separate_key_from_supabase_secret(monkeypatch):
+    monkeypatch.setenv("VERCEL", "1")
+    monkeypatch.delenv("JWT_SECRET", raising=False)
+    monkeypatch.setenv("SUPABASE_JWT_SECRET", "test-supabase-signing-secret")
+
+    derived_secret = _jwt_secret()
+
+    assert derived_secret
+    assert derived_secret != "test-supabase-signing-secret"
+    assert derived_secret == _jwt_secret()
+
+
+def test_jwt_secret_prefers_explicit_value(monkeypatch):
+    monkeypatch.setenv("VERCEL", "1")
+    monkeypatch.setenv("JWT_SECRET", "explicit-test-jwt-secret")
+    monkeypatch.setenv("SUPABASE_JWT_SECRET", "test-supabase-signing-secret")
+
+    assert _jwt_secret() == "explicit-test-jwt-secret"
 
 
 def test_registration_rejects_invalid_username_without_database():
