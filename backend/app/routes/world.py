@@ -3,13 +3,16 @@ from datetime import datetime, timedelta, timezone
 
 import jwt
 from flask import Blueprint, current_app, g, jsonify, request
+from pymongo.errors import DuplicateKeyError
 
 from backend.app.database import get_database
+from backend.app.osm_features import OSMUnavailableError, get_osm_features
 from backend.app.security import require_auth
 
 
 world_blueprint = Blueprint("world", __name__)
 MAX_LOCATIONS = 100
+MAX_WORLD_EDGE_METERS = 5000
 
 
 def _valid_coordinate(latitude, longitude) -> bool:
@@ -23,6 +26,15 @@ def _valid_coordinate(latitude, longitude) -> bool:
     )
 
 
+def _world_dimensions(event: dict) -> tuple[float, float]:
+    if not event.get("center"):
+        return MAX_WORLD_EDGE_METERS, MAX_WORLD_EDGE_METERS
+    return (
+        min(float(event.get("width_m", MAX_WORLD_EDGE_METERS)), MAX_WORLD_EDGE_METERS),
+        min(float(event.get("height_m", MAX_WORLD_EDGE_METERS)), MAX_WORLD_EDGE_METERS),
+    )
+
+
 @world_blueprint.get("/world")
 @require_auth
 def get_world():
@@ -32,15 +44,77 @@ def get_world():
         event = {
             "name": "Evento local",
             "center": None,
-            "width_m": 1200,
-            "height_m": 800,
+            "width_m": MAX_WORLD_EDGE_METERS,
+            "height_m": MAX_WORLD_EDGE_METERS,
             "locations": [],
             "beacons": [],
         }
     else:
         event.setdefault("locations", [])
         event.setdefault("beacons", [])
+    event["width_m"], event["height_m"] = _world_dimensions(event)
     return jsonify({"event_id": event_id, "event": event}), 200
+
+
+@world_blueprint.get("/world/features")
+@require_auth
+def get_world_features():
+    event_id = current_app.config["EVENT_ID"]
+    event = get_database().events.find_one(
+        {"_id": event_id},
+        {"center": 1, "width_m": 1, "height_m": 1},
+    ) or {}
+    center = event.get("center")
+    if not isinstance(center, dict) or not _valid_coordinate(center.get("lat"), center.get("lon")):
+        return jsonify({"error": "Defina o centro do evento antes de carregar edificios"}), 409
+
+    width_m, height_m = _world_dimensions(event)
+    try:
+        features = get_osm_features(event_id, center, width_m, height_m)
+    except OSMUnavailableError as error:
+        current_app.logger.warning("OSM feature query failed (%s)", type(error).__name__)
+        return jsonify({"error": "Os dados de edificios estao temporariamente indisponiveis"}), 503
+
+    response = jsonify({"features": features, "attribution": "OpenStreetMap contributors"})
+    response.headers["Cache-Control"] = "private, max-age=3600"
+    return response, 200
+
+
+@world_blueprint.post("/world/center")
+@require_auth
+def initialize_world_center():
+    body = request.get_json(silent=True)
+    if not isinstance(body, dict) or not _valid_coordinate(body.get("lat"), body.get("lon")):
+        return jsonify({"error": "Coordenadas invalidas"}), 400
+
+    event_id = current_app.config["EVENT_ID"]
+    events = get_database().events
+    event = events.find_one({"_id": event_id}, {"center": 1})
+    if event and isinstance(event.get("center"), dict):
+        return jsonify({"center": event["center"], "initialized": False}), 200
+
+    update = {
+        "$set": {
+            "center": {"lat": float(body["lat"]), "lon": float(body["lon"])},
+            "width_m": MAX_WORLD_EDGE_METERS,
+            "height_m": MAX_WORLD_EDGE_METERS,
+        },
+        "$setOnInsert": {"name": "Evento local", "locations": [], "beacons": []},
+    }
+    try:
+        result = events.update_one({"_id": event_id, "center": None}, update, upsert=True)
+    except DuplicateKeyError:
+        result = None
+
+    event = events.find_one({"_id": event_id}, {"center": 1})
+    if not event or not isinstance(event.get("center"), dict):
+        return jsonify({"error": "Nao foi possivel inicializar a area do evento"}), 503
+    return jsonify(
+        {
+            "center": event["center"],
+            "initialized": bool(result and (result.upserted_id or result.modified_count)),
+        }
+    ), 200
 
 
 @world_blueprint.put("/admin/event")
@@ -66,10 +140,10 @@ def update_event():
     if (
         not isinstance(width_m, (int, float))
         or not isinstance(height_m, (int, float))
-        or not 50 <= width_m <= 10000
-        or not 50 <= height_m <= 10000
+        or not 50 <= width_m <= MAX_WORLD_EDGE_METERS
+        or not 50 <= height_m <= MAX_WORLD_EDGE_METERS
     ):
-        return jsonify({"error": "Dimensoes do mapa devem estar entre 50 e 10000 metros"}), 400
+        return jsonify({"error": "Dimensoes do mapa devem estar entre 50 e 5000 metros"}), 400
     if not isinstance(locations, list) or len(locations) > MAX_LOCATIONS:
         return jsonify({"error": f"Informe no maximo {MAX_LOCATIONS} locais"}), 400
     if not isinstance(beacons, list) or len(beacons) > 20:
@@ -165,6 +239,7 @@ def realtime_token():
         {"_id": current_app.config["EVENT_ID"]},
         {"width_m": 1, "height_m": 1},
     ) or {}
+    width_m, height_m = _world_dimensions(event)
     now = datetime.now(timezone.utc)
     token = jwt.encode(
         {
@@ -175,8 +250,8 @@ def realtime_token():
             "aud": "authenticated",
             "iss": "supabase",
             "event_id": current_app.config["EVENT_ID"],
-            "event_width_m": event.get("width_m", 1200),
-            "event_height_m": event.get("height_m", 800),
+            "event_width_m": width_m,
+            "event_height_m": height_m,
             "iat": now,
             "exp": now + timedelta(minutes=10),
         },

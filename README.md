@@ -5,7 +5,9 @@ Supabase Realtime. A Vercel publica o cliente e executa a API.
 
 ## Estrutura
 
-Veja [docs/architecture.md](docs/architecture.md) para dominios, seguranca e contratos.
+Leia [docs/architecture.md](docs/architecture.md) para a visao geral e
+[docs/world-tiles-and-realtime.md](docs/world-tiles-and-realtime.md) para o desenho de
+celulas de 5 km, transicoes entre areas e conversas locais.
 
 ```text
 api/       adaptador Flask para Vercel
@@ -53,7 +55,11 @@ segredos JWT, senha SMTP, token administrativo ou chave Supabase `service_role`.
 - Cadastro com nome, senha protegida com scrypt e avatar predefinido; login e sessao JWT curta.
 - Perfil publico com nome, bio e interesses; email de recuperacao separado, privado
 	e utilizavel somente depois da confirmacao por link.
-- Mapa Phaser com movimento WASD/setas e pontos de interesse geograficos do evento.
+- Cidade 2.5D no Phaser com volumes de edificios nomeados e POIs do OpenStreetMap,
+	limitado a 5 × 5 km; sem imagem de mapa ou ruas ao fundo.
+- Se o evento ainda nao tiver centro, um participante define o ponto inicial com uma
+	leitura GPS unica; esse centro fica compartilhado no evento. O GPS continuo continua
+	opcional e separado.
 - GPS opcional; coordenadas ao vivo sao transmitidas apenas a membros
 	autenticados do evento e nao sao persistidas. O chat tambem e temporario.
 - Distancias aproximadas acompanhadas pela margem de erro dos dois aparelhos.

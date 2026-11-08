@@ -1,5 +1,10 @@
 # Arquitetura
 
+Este documento descreve os componentes e contratos gerais. O particionamento do mundo,
+os limites dos tiles e as conversas por area ficam detalhados em
+[world-tiles-and-realtime.md](world-tiles-and-realtime.md); manter essa separacao evita
+transformar a visao geral em um documento operacional excessivamente longo.
+
 ## Visao geral
 
 - `web/`: cliente TypeScript com Phaser 3, compilado como site estatico pelo Vite.
@@ -7,6 +12,8 @@
 - `api/index.py`: adaptador WSGI descoberto pela Vercel para executar a API Flask.
 - MongoDB Atlas: fonte persistente para contas, perfis e locais gamificados.
 - Supabase Realtime: presenca e mensagens efemeras entre jogadores.
+- OpenStreetMap/Overpass: geometrias e nomes de edificios/POIs; Phaser renderiza volumes
+   2.5D, sem imagem de mapa ou ruas como fundo.
 
 O cliente nunca recebe credenciais MongoDB, segredos JWT ou chaves `service_role`.
 O servidor Flask valida identidade e permissao; o cliente usa apenas a chave anonima
@@ -19,6 +26,8 @@ do Supabase e um token de curta duracao emitido pelo servidor para os canais pri
 - `profiles`: dados publicos escolhidos pelo jogador, separados dos dados de acesso.
 - `locations`: pontos geograficos aprovados para o mundo, com coordenadas, metadados
   publicos e referencia a arte versionada no repositorio do jogo.
+- `events`: centro geografico e configuracao da area. O centro e compartilhado por todos
+   os participantes do evento.
 - Presenca, posicoes ao vivo e mensagens nao sao persistidas inicialmente. Supabase
    Broadcast/Presence evita gravar historicos de chat e reduz o uso da cota do banco.
 
@@ -37,8 +46,9 @@ selecionaveis, sem upload de imagem pelos jogadores.
    somente como hash scrypt; respostas nao confirmam se um nome ou email existe.
 2. A API entrega tokens de sessao curtos. Um token separado, tambem curto, autoriza o
    jogador a entrar nos canais privados de Supabase para presenca e mensagens.
-3. O cliente carrega apenas os locais da area visivel e desenha-os no Phaser. Coordenadas
-   publicas sao aproximadas; nao armazenar localizacao precisa do jogador.
+3. A API consulta geometrias nomeadas de edificios e POIs do OpenStreetMap no tile ativo;
+   o Phaser renderiza volumes 2.5D e rótulos, sem basemap ou ruas. A area configurada tem
+   limite de 5 km por lado. Coordenadas publicas sao aproximadas; nao armazenar trilhas.
 4. Perfil publico e configuracao privada de email usam operacoes distintas e verificadas
     pelo dono da conta.
 
@@ -65,6 +75,8 @@ selecionaveis, sem upload de imagem pelos jogadores.
 - Transmitir coordenadas em mensagens Supabase Broadcast privadas, limitadas a sala/evento
    e a uma frequencia moderada; Presence guarda apenas estado basico de conectado. Nao gravar
    trilhas, coordenadas ao vivo ou distancias no MongoDB. Descartar estado ao sair/expirar.
+   A divisao por tiles e canais separados ainda e proposta; ver
+   [world-tiles-and-realtime.md](world-tiles-and-realtime.md).
 - Pedir permissao somente ao entrar no mundo, explicar o uso para proximidade entre jogadores,
    permitir pausar/optar por sair e nunca expor coordenadas em perfil publico. Aplicar RLS,
    tokens curtos por evento, validacao de idade do dado e limites contra abuso.
@@ -76,8 +88,9 @@ selecionaveis, sem upload de imagem pelos jogadores.
 - `POST /api/account/email` e `GET /api/account/email`; `POST /api/auth/verify-email`.
 - `POST /api/auth/recovery` e `POST /api/auth/reset` para email confirmado.
 - `GET /api/profiles/me`, `PATCH /api/profiles/me` e `GET /api/profiles/{username}`.
-- `GET /api/world` e `PUT /api/admin/event` para configurar o evento.
-- `POST /api/realtime/token` para autorizacao curta e restrita ao evento/usuario.
+- `GET /api/world`, `POST /api/world/center` e `PUT /api/admin/event` para configurar
+   o centro compartilhado e a area do evento.
+- `POST /api/realtime/token` para autorizacao curta restrita ao usuario e ao evento.
 
 As rotas validam entradas e mantem campos publicos separados de credenciais. A politica
 Realtime confere identidade de remetente, avatar e limites de tamanho no payload. Em
@@ -95,8 +108,14 @@ fica embutido no bundle e deve conter somente valores publicos. O segredo JWT de
 fica exclusivamente no servidor e precisa ser compativel com a configuracao de assinatura
 JWT do projeto Supabase. Nunca commitar `.env`.
 
-## Evolucao sugerida
+## Estado e evolucao
 
-1. Adicionar rate limiting distribuido no gateway e limites de uso por evento.
-2. Operar beacons BLE somente apos calibracao e testes nos aparelhos usados no evento.
-3. Adicionar observabilidade sem registrar senhas, tokens, email ou mensagens privadas.
+Hoje cada evento usa um unico canal privado `event:<event_id>`. O mundo tem uma unica
+area de ate 5 × 5 km; nao ha canais por tile nem conversas separadas por area. A
+arquitetura-alvo para eventos que ultrapassem esse limite esta especificada no documento
+de tiles; implementa-la exige atualizar tokens, cliente Realtime e politicas RLS juntos.
+
+1. Implementar os canais e conversas por tile definidos em `world-tiles-and-realtime.md`.
+2. Adicionar rate limiting distribuido no gateway e limites de uso por evento.
+3. Operar beacons BLE somente apos calibracao e testes nos aparelhos usados no evento.
+4. Adicionar observabilidade sem registrar senhas, tokens, email ou mensagens privadas.

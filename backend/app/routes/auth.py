@@ -74,7 +74,7 @@ def register():
     try:
         get_database().users.insert_one(user)
     except DuplicateKeyError:
-        return jsonify({"error": "Nao foi possivel criar a conta com esses dados"}), 409
+        return jsonify({"error": "Este nome de jogador ja esta em uso. Entre na conta ou escolha outro nome."}), 409
 
     return jsonify({"user": _public_user(user), "token": access_token}), 201
 

@@ -17,6 +17,17 @@ export interface WorldData {
   beacons: Array<{ id: string; service_uuid: string; x_m: number; y_m: number; tx_power: number; path_loss: number }>;
 }
 
+export interface WorldFeature {
+  id: string;
+  name: string;
+  kind: "building" | "poi";
+  category: string;
+  x: number;
+  y: number;
+  points: Array<[number, number]>;
+  height_m?: number;
+}
+
 export interface RemotePlayer {
   id: string;
   username: string;
@@ -39,6 +50,13 @@ const AVATAR_COLORS: Record<string, number> = {
   comet: 0xc3a7ee,
   bloom: 0xed9ab8,
 };
+const BUILDING_PALETTES = [
+  { roof: 0xb9c99a, wall: 0x758c68, side: 0x4c644f, trim: 0xd5d9ae },
+  { roof: 0xd7b58b, wall: 0x9c745d, side: 0x704f44, trim: 0xe7d0a6 },
+  { roof: 0x9ebfc0, wall: 0x668d8c, side: 0x41696b, trim: 0xc3d7c8 },
+  { roof: 0xd3c58b, wall: 0x9d8b5a, side: 0x716943, trim: 0xf0dda0 },
+  { roof: 0xc7b5ca, wall: 0x89758f, side: 0x62556e, trim: 0xe0cee0 },
+];
 
 export class WorldScene extends Phaser.Scene {
   private player!: Phaser.GameObjects.Container;
@@ -56,19 +74,21 @@ export class WorldScene extends Phaser.Scene {
   private cursors!: Phaser.Types.Input.Keyboard.CursorKeys;
   private remotes = new Map<string, Phaser.GameObjects.Container>();
   private lastBroadcast = 0;
-  private graphics!: Phaser.GameObjects.Graphics;
-  private touchBase!: Phaser.GameObjects.Arc;
-  private touchKnob!: Phaser.GameObjects.Arc;
   private touchVector = new Phaser.Math.Vector2();
-  private touchPointerId: number | null = null;
+  private locationObjects: Phaser.GameObjects.GameObject[] = [];
+  private cityGraphics!: Phaser.GameObjects.Graphics;
+  private cityFeatures: WorldFeature[] = [];
+  private featureLabels: Phaser.GameObjects.Text[] = [];
 
   constructor() {
     super("world");
   }
 
   create(): void {
-    this.graphics = this.add.graphics();
-    this.drawWorld();
+    this.cityGraphics = this.add.graphics();
+    this.cameras.main.setZoom(0.65);
+    this.drawCity();
+    this.drawLocations();
     this.player = this.makePlayer(0x9de2b1, "Voce");
     this.playerX = this.world.width_m / 2;
     this.playerY = this.world.height_m / 2;
@@ -87,40 +107,6 @@ export class WorldScene extends Phaser.Scene {
       this.cursors = keyboard.createCursorKeys();
     }
 
-    const touchEnabled = navigator.maxTouchPoints > 0;
-    this.touchBase = this.add.circle(0, 0, 48, 0x101a18, 0.55)
-      .setStrokeStyle(2, 0xc3d7c8, 0.55)
-      .setScrollFactor(0)
-      .setDepth(1000)
-      .setVisible(touchEnabled);
-    this.touchKnob = this.add.circle(0, 0, 19, 0x9de2b1, 0.9)
-      .setScrollFactor(0)
-      .setDepth(1001)
-      .setVisible(touchEnabled);
-    if (touchEnabled) {
-      this.input.on("pointerdown", (pointer: Phaser.Input.Pointer) => {
-        const height = this.scale.gameSize.height;
-        if (this.touchPointerId !== null || pointer.x > 160 || pointer.y < height - 180) {
-          return;
-        }
-        this.touchPointerId = pointer.id;
-        this.updateTouchStick(pointer.x, pointer.y);
-      });
-      this.input.on("pointermove", (pointer: Phaser.Input.Pointer) => {
-        if (pointer.id === this.touchPointerId) {
-          this.updateTouchStick(pointer.x, pointer.y);
-        }
-      });
-      const releaseTouch = (pointer: Phaser.Input.Pointer) => {
-        if (pointer.id === this.touchPointerId) {
-          this.touchPointerId = null;
-          this.touchVector.set(0, 0);
-          this.positionTouchStick();
-        }
-      };
-      this.input.on("pointerup", releaseTouch);
-      this.input.on("pointerupoutside", releaseTouch);
-    }
   }
 
   update(time: number, delta: number): void {
@@ -134,8 +120,6 @@ export class WorldScene extends Phaser.Scene {
           - Number(this.keys.up.isDown || this.cursors.up.isDown)
         : 0) + this.touchVector.y,
     ).normalize();
-    this.positionTouchStick();
-
     if (movement.lengthSq() > 0) {
       const speed = PLAYER_SPEED * (delta / 1000);
       this.playerX = Phaser.Math.Clamp(this.playerX + movement.x * speed, 8, this.world.width_m - 8);
@@ -150,15 +134,27 @@ export class WorldScene extends Phaser.Scene {
   }
 
   setWorld(world: WorldData): void {
-    this.world = world;
-    if (!this.graphics) {
-      return;
-    }
-    this.drawWorld();
-    this.playerX = world.width_m / 2;
-    this.playerY = world.height_m / 2;
+    this.world = {
+      ...world,
+      width_m: Math.min(world.width_m, 5000),
+      height_m: Math.min(world.height_m, 5000),
+    };
+    this.cityFeatures = [];
+    this.drawCity();
+    this.drawLocations();
+    this.playerX = this.world.width_m / 2;
+    this.playerY = this.world.height_m / 2;
     this.player.setPosition(this.playerX, this.playerY);
-    this.cameras.main.setBounds(0, 0, world.width_m, world.height_m);
+    this.cameras.main.setBounds(0, 0, this.world.width_m, this.world.height_m);
+  }
+
+  setFeatures(features: WorldFeature[]): void {
+    this.cityFeatures = features;
+    this.drawCity();
+  }
+
+  setTouchMovement(x: number, y: number): void {
+    this.touchVector.set(x, y).limit(1);
   }
 
   setLocalGeoPosition(latitude: number, longitude: number): { x: number; y: number } | null {
@@ -207,11 +203,11 @@ export class WorldScene extends Phaser.Scene {
   }
 
   private makePlayer(color: number, label: string): Phaser.GameObjects.Container {
-    const circle = this.add.circle(0, 0, 7, color).setStrokeStyle(2, 0xf2f7da);
+    const circle = this.add.circle(0, 0, 11, color).setStrokeStyle(2, 0xf2f7da);
     const name = this.add.text(0, 13, label, {
       color: "#edf5e9",
       fontFamily: "Manrope, sans-serif",
-      fontSize: "11px",
+      fontSize: "18px",
       stroke: "#101a18",
       strokeThickness: 3,
     }).setOrigin(0.5, 0);
@@ -225,48 +221,171 @@ export class WorldScene extends Phaser.Scene {
     name.setText(label);
   }
 
-  private updateTouchStick(pointerX: number, pointerY: number): void {
-    const centerX = 76;
-    const centerY = this.scale.gameSize.height - 76;
-    const deltaX = pointerX - centerX;
-    const deltaY = pointerY - centerY;
-    const distance = Math.hypot(deltaX, deltaY);
-    const radius = 34;
-    const clampedDistance = Math.min(distance, radius);
-
-    this.touchVector.set(
-      distance > 8 ? deltaX / distance : 0,
-      distance > 8 ? deltaY / distance : 0,
-    );
-    this.touchKnob.setPosition(
-      centerX + (distance ? deltaX / distance : 0) * clampedDistance,
-      centerY + (distance ? deltaY / distance : 0) * clampedDistance,
-    );
-  }
-
-  private positionTouchStick(): void {
-    if (this.touchPointerId !== null) {
+  private drawCity(): void {
+    if (!this.cityGraphics) {
       return;
     }
-    const centerX = 76;
-    const centerY = this.scale.gameSize.height - 76;
-    this.touchBase.setPosition(centerX, centerY);
-    this.touchKnob.setPosition(centerX, centerY);
+    this.cityGraphics.clear();
+    this.cityGraphics.fillStyle(0x26372b, 1);
+    this.cityGraphics.fillRect(0, 0, this.world.width_m, this.world.height_m);
+    for (const label of this.featureLabels) {
+      label.destroy();
+    }
+    this.featureLabels = [];
+
+    const features = [...this.cityFeatures].sort((first, second) => first.y - second.y);
+    let labelsDrawn = 0;
+    for (const feature of features) {
+      if (feature.kind === "building" && feature.points.length >= 3) {
+        this.drawBuilding(feature);
+        if (labelsDrawn < 220) {
+          const height = this.buildingDepth(feature);
+          this.addFeatureLabel(feature, feature.x + height * 0.42, feature.y - height * 0.72 - 10);
+          labelsDrawn += 1;
+        }
+      } else {
+        this.drawPoi(feature);
+        if (labelsDrawn < 220) {
+          this.addFeatureLabel(feature, feature.x + 14, feature.y - 12);
+          labelsDrawn += 1;
+        }
+      }
+    }
   }
 
-  private drawWorld(): void {
-    this.graphics.clear();
-    this.graphics.fillStyle(0x172722, 1);
-    this.graphics.fillRect(0, 0, this.world.width_m, this.world.height_m);
-    this.graphics.lineStyle(1, 0x263a32, 0.7);
+  private drawBuilding(feature: WorldFeature): void {
+    const palette = BUILDING_PALETTES[this.stablePalette(feature)];
+    const depth = this.buildingDepth(feature);
+    const offsetX = depth * 0.42;
+    const offsetY = -depth * 0.72;
+    const roof = feature.points.map(([x, y]) => [x + offsetX, y + offsetY] as [number, number]);
 
-    for (let x = 0; x <= this.world.width_m; x += 40) {
-      this.graphics.lineBetween(x, 0, x, this.world.height_m);
-    }
-    for (let y = 0; y <= this.world.height_m; y += 40) {
-      this.graphics.lineBetween(0, y, this.world.width_m, y);
-    }
+    this.drawPolygon(
+      feature.points.map(([x, y]) => [x + 4, y + 6]),
+      0x152319,
+      0x152319,
+      0,
+    );
 
+    for (let index = 0; index < feature.points.length; index += 1) {
+      const next = (index + 1) % feature.points.length;
+      const first = feature.points[index];
+      const second = feature.points[next];
+      this.drawPolygon(
+        [first, second, roof[next], roof[index]],
+        index % 2 === 0 ? palette.wall : palette.side,
+        palette.side,
+        1,
+      );
+      if (index % 2 === 0) {
+        this.drawWindows(first, second, offsetX, offsetY, palette.trim);
+      }
+    }
+    this.drawPolygon(roof, palette.roof, palette.trim, 1.2);
+
+    const roofCenter = this.averagePoint(roof);
+    this.cityGraphics.fillStyle(palette.trim, 0.65);
+    this.cityGraphics.fillRoundedRect(roofCenter[0] - 6, roofCenter[1] - 3, 12, 6, 2);
+  }
+
+  private drawWindows(
+    first: [number, number],
+    second: [number, number],
+    offsetX: number,
+    offsetY: number,
+    color: number,
+  ): void {
+    const edgeLength = Phaser.Math.Distance.Between(first[0], first[1], second[0], second[1]);
+    const count = Phaser.Math.Clamp(Math.floor(edgeLength / 18), 1, 4);
+    this.cityGraphics.fillStyle(color, 0.88);
+    for (let index = 0; index < count; index += 1) {
+      const amount = (index + 1) / (count + 1);
+      const x = Phaser.Math.Linear(first[0], second[0], amount) + offsetX * 0.58;
+      const y = Phaser.Math.Linear(first[1], second[1], amount) + offsetY * 0.58;
+      this.cityGraphics.fillRoundedRect(x - 2, y - 3, 4, 6, 1);
+    }
+  }
+
+  private drawPoi(feature: WorldFeature): void {
+    const color = this.poiColor(feature.category);
+    this.cityGraphics.fillStyle(0x17251d, 0.85);
+    this.cityGraphics.fillCircle(feature.x + 2, feature.y + 3, 11);
+    this.cityGraphics.fillStyle(color, 1);
+    this.cityGraphics.fillCircle(feature.x, feature.y, 8);
+    this.cityGraphics.lineStyle(2, 0xf3edcf, 1);
+    this.cityGraphics.strokeCircle(feature.x, feature.y, 8);
+    this.cityGraphics.fillStyle(0xf3edcf, 1);
+    this.cityGraphics.fillCircle(feature.x, feature.y, 2);
+  }
+
+  private drawPolygon(
+    points: Array<[number, number]>,
+    fillColor: number,
+    lineColor: number,
+    lineWidth: number,
+  ): void {
+    if (points.length < 3) {
+      return;
+    }
+    this.cityGraphics.fillStyle(fillColor, 1);
+    this.cityGraphics.lineStyle(lineWidth, lineColor, 1);
+    this.cityGraphics.beginPath();
+    this.cityGraphics.moveTo(points[0][0], points[0][1]);
+    for (const point of points.slice(1)) {
+      this.cityGraphics.lineTo(point[0], point[1]);
+    }
+    this.cityGraphics.closePath();
+    this.cityGraphics.fillPath();
+    if (lineWidth > 0) {
+      this.cityGraphics.strokePath();
+    }
+  }
+
+  private addFeatureLabel(feature: WorldFeature, x: number, y: number): void {
+    const label = this.add.text(x, y, feature.name, {
+      backgroundColor: feature.kind === "building" ? "#1c2a22ed" : "#263328ed",
+      color: "#f2eddb",
+      fontFamily: "Manrope, sans-serif",
+      fontSize: "14px",
+      padding: { x: 5, y: 3 },
+      stroke: "#17231b",
+      strokeThickness: 2,
+    }).setOrigin(0.5, 1).setDepth(20);
+    this.featureLabels.push(label);
+  }
+
+  private buildingDepth(feature: WorldFeature): number {
+    return Phaser.Math.Clamp((feature.height_m ?? 12) * 0.55, 6, 44);
+  }
+
+  private stablePalette(feature: WorldFeature): number {
+    const value = `${feature.category}:${feature.name}`;
+    let hash = 0;
+    for (let index = 0; index < value.length; index += 1) {
+      hash = (hash * 31 + value.charCodeAt(index)) | 0;
+    }
+    return Math.abs(hash) % BUILDING_PALETTES.length;
+  }
+
+  private averagePoint(points: Array<[number, number]>): [number, number] {
+    return [
+      points.reduce((sum, point) => sum + point[0], 0) / points.length,
+      points.reduce((sum, point) => sum + point[1], 0) / points.length,
+    ];
+  }
+
+  private poiColor(category: string): number {
+    if (["museum", "place_of_worship", "theatre", "historic"].includes(category)) return 0xe2b875;
+    if (["cafe", "restaurant", "bar", "pub"].includes(category)) return 0xed9b75;
+    if (["shop", "market", "supermarket"].includes(category)) return 0x85c2b0;
+    return 0xa8c99a;
+  }
+
+  private drawLocations(): void {
+    for (const object of this.locationObjects) {
+      object.destroy();
+    }
+    this.locationObjects = [];
     if (this.world.center) {
       for (const location of this.world.locations) {
         const latitudeOffset = Phaser.Math.DegToRad(location.lat - this.world.center.lat);
@@ -278,11 +397,11 @@ export class WorldScene extends Phaser.Scene {
         const label = this.add.text(x + 9, y - 7, location.name, {
           color: "#f4e9be",
           fontFamily: "Manrope, sans-serif",
-          fontSize: "10px",
+          fontSize: "16px",
           stroke: "#101a18",
           strokeThickness: 3,
         });
-        this.add.container(0, 0, [marker, label]);
+        this.locationObjects.push(marker, label);
       }
     }
   }

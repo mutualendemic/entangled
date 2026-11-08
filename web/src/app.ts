@@ -3,7 +3,7 @@ import { apiRequest, getToken, setToken, type Profile, type User } from "./servi
 import { startBeaconScan } from "./services/bluetooth";
 import { distanceBetween, stopWatchingLocation, watchLocation, type GeoPosition } from "./services/location";
 import { RealtimeSession, type ChatMessage } from "./services/realtime";
-import { WorldScene, type RemotePlayer, type WorldData } from "./world/WorldScene";
+import { WorldScene, type RemotePlayer, type WorldData, type WorldFeature } from "./world/WorldScene";
 
 const AVATARS = ["moss", "ember", "wave", "sun", "comet", "bloom"] as const;
 const AVATAR_LABELS: Record<(typeof AVATARS)[number], string> = {
@@ -189,6 +189,12 @@ async function renderGame(root: HTMLElement, user: User): Promise<void> {
     apiRequest<{ profile: Profile }>("/profiles/me"),
     apiRequest<{ email: string | null; pending: boolean; verified: boolean }>("/account/email"),
   ]);
+  event.width_m = Math.min(event.width_m || 5000, 5000);
+  event.height_m = Math.min(event.height_m || 5000, 5000);
+  if (!event.center) {
+    event.width_m = 5000;
+    event.height_m = 5000;
+  }
 
   root.innerHTML = `
     <main class="game-app">
@@ -201,9 +207,27 @@ async function renderGame(root: HTMLElement, user: User): Promise<void> {
         <section class="world-column">
           <div class="world-toolbar">
             <div><p class="eyebrow">MAPA DO EVENTO</p><h1>${escapeHtml(event.name)}</h1></div>
-            <div class="world-coordinates" id="location-status">Localizacao desligada</div>
+            <div class="world-coordinates" id="location-status">${event.center ? "Localizacao desligada" : "Centro do evento pendente"}</div>
           </div>
-          <div class="world-frame"><div id="world-canvas" aria-label="Mundo 2D"></div><div class="map-scale">N&nbsp; ↑ &nbsp;100 m</div></div>
+          <div class="world-frame">
+            <div id="world-canvas" aria-label="Personagens e pontos do mundo"></div>
+            <div class="map-area-label">ÁREA DO EVENTO <strong>${(event.width_m / 1000).toFixed(1)} × ${(event.height_m / 1000).toFixed(1)} KM</strong></div>
+            <div class="city-indicator">
+              <span id="city-status" class="city-status" aria-live="polite">${event.center ? "Carregando edifícios e POIs..." : "Aguardando centro do evento"}</span>
+              <button id="city-retry" class="city-retry" type="button" title="Tentar carregar edifícios novamente" aria-label="Tentar carregar edifícios novamente" hidden>↻</button>
+            </div>
+            <div class="map-credit">Dados © OpenStreetMap contributors</div>
+            <div id="map-center-prompt" class="map-center-prompt" ${event.center ? "hidden" : ""}>
+              <div class="map-center-content">
+                <p class="eyebrow">MAPA DO EVENTO</p>
+                <h2>Escolha o centro da cidade</h2>
+                <p>Use uma leitura GPS para fixar o centro compartilhado e carregar edifícios nomeados e POIs no tile de 5 km.</p>
+                <button class="primary-button" id="initialize-world" type="button">Definir centro pelo GPS</button>
+                <p class="notice" id="map-center-notice" role="status"></p>
+              </div>
+            </div>
+            <div id="movement-stick" class="movement-stick" role="application" aria-label="Controle de movimento" hidden><span class="movement-stick-knob"></span></div>
+          </div>
           <div class="gps-control">
             <div class="location-modes">
               <label class="gps-toggle"><input id="gps-toggle" type="checkbox" /><span class="toggle-track"></span><span>Compartilhar GPS</span></label>
@@ -251,7 +275,7 @@ async function renderGame(root: HTMLElement, user: User): Promise<void> {
   const game = new Phaser.Game({
     type: Phaser.AUTO,
     parent: "world-canvas",
-    backgroundColor: "#172722",
+    transparent: true,
     scale: { mode: Phaser.Scale.RESIZE, width: "100%", height: "100%" },
     scene: [WorldScene],
   });
@@ -263,10 +287,13 @@ async function renderGame(root: HTMLElement, user: User): Promise<void> {
   let localSource: "gps" | "ble" | "local" = "local";
   let localAccuracy = 0;
   let scene: WorldScene | null = null;
+  let cityFeatures: WorldFeature[] = [];
   const messages = root.querySelector<HTMLElement>("#message-list")!;
   const positionList = root.querySelector<HTMLElement>("#player-list")!;
   const status = root.querySelector<HTMLElement>("#connection-status")!;
   const locationStatus = root.querySelector<HTMLElement>("#location-status")!;
+  const cityStatus = root.querySelector<HTMLElement>("#city-status")!;
+  const cityRetry = root.querySelector<HTMLButtonElement>("#city-retry")!;
   const realtime = new RealtimeSession(
     user,
     (players) => {
@@ -311,6 +338,25 @@ async function renderGame(root: HTMLElement, user: User): Promise<void> {
     }
   }
 
+  async function loadCityFeatures(): Promise<void> {
+    cityRetry.hidden = true;
+    cityStatus.textContent = "Consultando edifícios e pontos de interesse...";
+    try {
+      const result = await apiRequest<{ features: WorldFeature[] }>("/world/features");
+      cityFeatures = result.features;
+      scene?.setFeatures(cityFeatures);
+      const buildings = cityFeatures.filter((feature) => feature.kind === "building").length;
+      const points = cityFeatures.length - buildings;
+      cityStatus.textContent = cityFeatures.length
+        ? `${buildings} edifícios · ${points} POIs`
+        : "Nenhum edifício nomeado ou POI encontrado neste tile.";
+    } catch (error) {
+      cityStatus.textContent = errorMessage(error);
+      cityRetry.hidden = false;
+    }
+  }
+  cityRetry.addEventListener("click", () => { void loadCityFeatures(); });
+
   function playerDistance(player: RemotePlayer): string {
     if (player.id === user.id) return localSource === "local" ? "Posicao local" : `${localSource.toUpperCase()} ±${Math.round(localAccuracy)} m`;
     const sentAt = (player as RemotePlayer & { sentAt?: number }).sentAt;
@@ -339,6 +385,7 @@ async function renderGame(root: HTMLElement, user: User): Promise<void> {
   game.events.once(Phaser.Core.Events.READY, () => {
     scene = game.scene.getScene("world") as WorldScene;
     scene.setWorld(event);
+    scene.setFeatures(cityFeatures);
     scene.setLocalIdentity(user.username, user.avatar);
     scene.events.on("position", (position: { x: number; y: number }) => {
       void realtime.sendPosition({
@@ -352,7 +399,82 @@ async function renderGame(root: HTMLElement, user: User): Promise<void> {
     });
   });
 
+  const centerPrompt = root.querySelector<HTMLElement>("#map-center-prompt")!;
+  const centerNotice = root.querySelector<HTMLElement>("#map-center-notice")!;
+  const initializeWorldButton = root.querySelector<HTMLButtonElement>("#initialize-world")!;
+  initializeWorldButton.addEventListener("click", () => {
+    if (!navigator.geolocation || !window.isSecureContext) {
+      centerNotice.textContent = "A localizacao requer GPS e uma conexao HTTPS.";
+      return;
+    }
+    initializeWorldButton.disabled = true;
+    centerNotice.textContent = "Obtendo localizacao para configurar o evento...";
+    navigator.geolocation.getCurrentPosition(async ({ coords }) => {
+      try {
+        const result = await apiRequest<{ center: { lat: number; lon: number } }>("/world/center", {
+          method: "POST",
+          body: { lat: coords.latitude, lon: coords.longitude },
+        });
+        event.center = result.center;
+        event.width_m = 5000;
+        event.height_m = 5000;
+        centerPrompt.hidden = true;
+        movementStick.hidden = !supportsTouch;
+        scene?.setWorld(event);
+        const position = scene?.setLocalGeoPosition(coords.latitude, coords.longitude);
+        locationStatus.textContent = "Centro do evento configurado";
+        void loadCityFeatures();
+      } catch (error) {
+        centerNotice.textContent = errorMessage(error);
+        initializeWorldButton.disabled = false;
+      }
+    }, (error) => {
+      centerNotice.textContent = error.code === error.PERMISSION_DENIED
+        ? "Permita a localizacao para definir o centro do evento."
+        : "Nao foi possivel obter a localizacao GPS.";
+      initializeWorldButton.disabled = false;
+    }, { enableHighAccuracy: true, maximumAge: 30_000, timeout: 15_000 });
+  });
+
+  const movementStick = root.querySelector<HTMLElement>("#movement-stick")!;
+  const movementKnob = root.querySelector<HTMLElement>(".movement-stick-knob")!;
+  const supportsTouch = navigator.maxTouchPoints > 0;
+  movementStick.hidden = !supportsTouch || !event.center;
+  let movementPointer: number | null = null;
+  const updateMovementStick = (pointer: PointerEvent): void => {
+    const bounds = movementStick.getBoundingClientRect();
+    const dx = pointer.clientX - (bounds.left + bounds.width / 2);
+    const dy = pointer.clientY - (bounds.top + bounds.height / 2);
+    const distance = Math.hypot(dx, dy);
+    const maximum = bounds.width * 0.32;
+    const magnitude = Math.min(distance / maximum, 1);
+    const x = distance > 0 ? (dx / distance) * magnitude : 0;
+    const y = distance > 0 ? (dy / distance) * magnitude : 0;
+    scene?.setTouchMovement(x, y);
+    movementKnob.style.transform = `translate(${x * maximum}px, ${y * maximum}px)`;
+  };
+  movementStick.addEventListener("pointerdown", (event) => {
+    event.preventDefault();
+    movementPointer = event.pointerId;
+    movementStick.setPointerCapture(event.pointerId);
+    updateMovementStick(event);
+  });
+  movementStick.addEventListener("pointermove", (event) => {
+    if (event.pointerId === movementPointer) updateMovementStick(event);
+  });
+  const releaseMovement = (event: PointerEvent): void => {
+    if (event.pointerId !== movementPointer) return;
+    movementPointer = null;
+    scene?.setTouchMovement(0, 0);
+    movementKnob.style.transform = "translate(0, 0)";
+  };
+  movementStick.addEventListener("pointerup", releaseMovement);
+  movementStick.addEventListener("pointercancel", releaseMovement);
+
   drawPlayers();
+  if (event.center) {
+    void loadCityFeatures();
+  }
   void realtime.start().catch((error: unknown) => { status.textContent = errorMessage(error); });
   root.querySelectorAll<HTMLButtonElement>("[data-panel]").forEach((button) => {
     button.addEventListener("click", () => {

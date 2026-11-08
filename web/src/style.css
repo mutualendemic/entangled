@@ -89,9 +89,27 @@ button:disabled { cursor: wait; opacity: .6; }
 .world-toolbar .eyebrow { margin-bottom: 5px; }
 .world-toolbar h1 { margin: 0; color: var(--paper); font-size: 23px; line-height: 1.2; }
 .world-coordinates { color: #c6d5bd; font: 11px var(--mono); text-align: right; }
-.world-frame { position: relative; min-height: 220px; overflow: hidden; border: 1px solid #3c4c41; border-radius: 4px; background: #172722; }
-#world-canvas, #world-canvas canvas { display: block; width: 100%; height: 100%; }
-.map-scale { position: absolute; right: 14px; bottom: 12px; padding: 6px 8px; border: 1px solid #4d5d50; border-radius: 3px; background: #101816d9; color: #c8d5c8; font: 10px var(--mono); pointer-events: none; }
+.world-frame { position: relative; min-height: 220px; overflow: hidden; isolation: isolate; border: 1px solid #3c4c41; border-radius: 4px; background: #26372b; }
+#world-canvas { position: absolute; z-index: 3; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+#world-canvas canvas { display: block; width: 100%; height: 100%; pointer-events: none; }
+.city-indicator { position: absolute; z-index: 8; top: 12px; left: 12px; display: flex; align-items: flex-start; gap: 5px; max-width: 58%; }
+.city-status { padding: 7px 9px; border: 1px solid #526354; border-radius: 3px; background: #17251de8; color: #e3e9d8; font: 9px var(--mono); line-height: 1.4; pointer-events: none; }
+.city-retry { flex: 0 0 28px; width: 28px; height: 28px; border: 1px solid #526354; border-radius: 3px; background: #17251de8; color: #e3e9d8; font-size: 17px; cursor: pointer; }
+.city-retry[hidden] { display: none; }
+.map-credit { position: absolute; z-index: 8; right: 7px; bottom: 5px; color: #c4cfbf; font: 8px var(--mono); text-shadow: 0 1px 3px #101a12; pointer-events: none; }
+.map-area-label { position: absolute; z-index: 8; top: 12px; right: 12px; display: grid; gap: 3px; padding: 7px 9px; border: 1px solid #687568; border-radius: 3px; background: #f3f5e9e8; color: #536254; font: 8px var(--mono); pointer-events: none; }
+.map-area-label strong { color: #27382c; font-size: 10px; }
+.map-center-prompt { position: absolute; z-index: 15; inset: 0; display: grid; place-items: center; padding: 24px; background: #15241be8; color: var(--paper); text-align: center; }
+.map-center-prompt[hidden] { display: none; }
+.map-center-content { display: grid; justify-items: center; gap: 10px; max-width: 420px; }
+.map-center-content .eyebrow { margin: 0; color: var(--bright); }
+.map-center-content h2 { margin: 0; font-size: 20px; }
+.map-center-content > p:not(.eyebrow):not(.notice) { margin: 0 0 5px; color: #c3d0c4; font-size: 12px; line-height: 1.5; }
+.map-center-content .primary-button { min-height: 40px; padding: 0 16px; }
+.map-center-content .notice { margin: 0; color: #f4c1a8; font-size: 11px; }
+.movement-stick { position: absolute; z-index: 10; bottom: 20px; left: 20px; display: grid; width: 118px; aspect-ratio: 1; place-items: center; border: 1px solid #dfe8d3b8; border-radius: 50%; background: #18271b77; touch-action: none; user-select: none; }
+.movement-stick[hidden] { display: none; }
+.movement-stick-knob { width: 42px; aspect-ratio: 1; border: 2px solid #eff6e2; border-radius: 50%; background: #88be8fd9; box-shadow: 0 2px 9px #0e180d70; }
 .gps-control { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 42px; }
 .location-modes { display: flex; align-items: center; gap: 18px; }
 .gps-toggle { display: flex; align-items: center; gap: 10px; color: #dce6db; font-size: 12px; cursor: pointer; }
@@ -171,6 +189,10 @@ button:disabled { cursor: wait; opacity: .6; }
   .world-toolbar .eyebrow { font-size: 8px; }
   .world-coordinates { max-width: 42%; font-size: 9px; }
   .world-frame { min-height: 180px; }
+  .map-center-prompt { padding: 16px; }
+  .map-center-content h2 { font-size: 17px; }
+  .movement-stick { bottom: 12px; left: 12px; width: 104px; }
+  .movement-stick-knob { width: 38px; }
   .gps-control { align-items: flex-start; flex-direction: column; gap: 6px; }
   .location-modes { flex-wrap: wrap; gap: 13px; }
   .gps-toggle { font-size: 11px; }
