@@ -2,6 +2,7 @@ import json
 import math
 import re
 import time
+import xml.etree.ElementTree as ET
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -10,10 +11,12 @@ from flask import current_app
 
 
 OVERPASS_URL = "https://overpass-api.de/api/interpreter"
+OSM_MAP_URL = "https://api.openstreetmap.org/api/0.6/map"
 EARTH_RADIUS_METERS = 6_371_000
 MAX_RESPONSE_BYTES = 5 * 1024 * 1024
 MAX_FEATURES = 700
 CACHE_TTL_SECONDS = 3600
+MAX_QUERY_EDGE_METERS = 5000
 
 
 class OSMUnavailableError(Exception):
@@ -143,14 +146,8 @@ def parse_osm_elements(elements, center, width_m, height_m):
 
 
 def _overpass_query(center, width_m, height_m):
-    latitude_delta = height_m / (2 * 111_320)
-    longitude_delta = width_m / (
-        2 * 111_320 * max(math.cos(math.radians(center["lat"])), 0.01)
-    )
-    bounds = (
-        f"{center['lat'] - latitude_delta},{center['lon'] - longitude_delta},"
-        f"{center['lat'] + latitude_delta},{center['lon'] + longitude_delta}"
-    )
+    west, south, east, north = _bounds(center, width_m, height_m)
+    bounds = f"{south},{west},{north},{east}"
     return (
         "[out:json][timeout:18];("
         f'way["building"]["name"]({bounds});'
@@ -161,6 +158,19 @@ def _overpass_query(center, width_m, height_m):
         f'nwr["historic"]["name"]({bounds});'
         f'nwr["leisure"]["name"]({bounds});'
         ");out center geom;"
+    )
+
+
+def _bounds(center, width_m, height_m):
+    width_m = min(float(width_m), MAX_QUERY_EDGE_METERS)
+    height_m = min(float(height_m), MAX_QUERY_EDGE_METERS)
+    half_height = height_m / (2 * 111_320)
+    half_width = width_m / (2 * 111_320 * max(math.cos(math.radians(center["lat"])), 0.01))
+    return (
+        center["lon"] - half_width,
+        center["lat"] - half_height,
+        center["lon"] + half_width,
+        center["lat"] + half_height,
     )
 
 
@@ -176,7 +186,7 @@ def _fetch_elements(center, width_m, height_m):
         method="POST",
     )
     try:
-        with urllib.request.urlopen(request, timeout=22) as response:
+        with urllib.request.urlopen(request, timeout=6) as response:
             raw = response.read(MAX_RESPONSE_BYTES + 1)
     except (urllib.error.URLError, TimeoutError, OSError) as error:
         raise OSMUnavailableError(type(error).__name__) from error
@@ -191,6 +201,68 @@ def _fetch_elements(center, width_m, height_m):
     return data.get("elements", [])
 
 
+def _fetch_osm_map_features(center, width_m, height_m):
+    west, south, east, north = _bounds(center, width_m, height_m)
+    query = urllib.parse.urlencode({"bbox": f"{west},{south},{east},{north}"})
+    request = urllib.request.Request(
+        f"{OSM_MAP_URL}?{query}",
+        headers={
+            "Accept": "application/xml",
+            "User-Agent": "Entanglement/0.1 (https://github.com/mutualendemic/entangled)",
+        },
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=6) as response:
+            raw = response.read(MAX_RESPONSE_BYTES + 1)
+    except (urllib.error.URLError, TimeoutError, OSError) as error:
+        raise OSMUnavailableError(type(error).__name__) from error
+    if len(raw) > MAX_RESPONSE_BYTES:
+        raise OSMUnavailableError("ResponseTooLarge")
+    try:
+        root = ET.fromstring(raw)
+    except ET.ParseError as error:
+        raise OSMUnavailableError("InvalidResponse") from error
+
+    nodes = {
+        node.attrib["id"]: {"lat": float(node.attrib["lat"]), "lon": float(node.attrib["lon"])}
+        for node in root.findall("node")
+        if "id" in node.attrib and "lat" in node.attrib and "lon" in node.attrib
+    }
+    poi_keys = {"amenity", "shop", "tourism", "historic", "leisure", "natural", "place", "public_transport"}
+    elements = []
+    for node in root.findall("node"):
+        tags = {tag.attrib.get("k", ""): tag.attrib.get("v", "") for tag in node.findall("tag")}
+        if tags.get("name") and poi_keys.intersection(tags):
+            elements.append({
+                "type": "node",
+                "id": node.attrib.get("id", ""),
+                "lat": float(node.attrib["lat"]),
+                "lon": float(node.attrib["lon"]),
+                "tags": tags,
+            })
+
+    for way in root.findall("way"):
+        tags = {tag.attrib.get("k", ""): tag.attrib.get("v", "") for tag in way.findall("tag")}
+        named_building = bool(tags.get("building") and tags.get("name"))
+        named_poi = bool(tags.get("name") and poi_keys.intersection(tags))
+        if not (named_building or named_poi):
+            continue
+        geometry = [nodes[ref.attrib["ref"]] for ref in way.findall("nd") if ref.attrib.get("ref") in nodes]
+        if not geometry:
+            continue
+        elements.append({
+            "type": "way",
+            "id": way.attrib.get("id", ""),
+            "tags": tags,
+            "center": {
+                "lat": sum(point["lat"] for point in geometry) / len(geometry),
+                "lon": sum(point["lon"] for point in geometry) / len(geometry),
+            },
+            "geometry": geometry,
+        })
+    return parse_osm_elements(elements, center, width_m, height_m)
+
+
 def get_osm_features(event_id, center, width_m, height_m):
     cache = current_app.extensions.setdefault("osm_feature_cache", {})
     key = (event_id, round(center["lat"], 5), round(center["lon"], 5), width_m, height_m)
@@ -198,7 +270,10 @@ def get_osm_features(event_id, center, width_m, height_m):
     cached = cache.get(key)
     if cached and cached[0] > now:
         return cached[1]
-    features = parse_osm_elements(_fetch_elements(center, width_m, height_m), center, width_m, height_m)
+    try:
+        features = parse_osm_elements(_fetch_elements(center, width_m, height_m), center, width_m, height_m)
+    except OSMUnavailableError:
+        features = _fetch_osm_map_features(center, width_m, height_m)
     cache[key] = (now + CACHE_TTL_SECONDS, features)
     if len(cache) > 24:
         for expired_key in [cache_key for cache_key, value in cache.items() if value[0] <= now]:

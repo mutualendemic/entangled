@@ -108,8 +108,10 @@ borda; nao sao instancias independentes do aplicativo.
 
 ## Carregamento e renderizacao de edificios
 
-`GET /api/world/features` consulta Overpass para o bbox do evento (no maximo 5 km por
-lado), pedindo edificios com nome e POIs nomeados de interesse. A resposta contem o
+`GET /api/world/features` consulta Overpass para o bbox exato configurado no evento, com
+no maximo 5000 m de largura e 5000 m de altura, sem buffer nem celulas vizinhas. Se
+Overpass expirar, o fallback na API de dados OSM usa os mesmos quatro limites geograficos.
+Ambas as fontes pedem edificios com nome e POIs nomeados de interesse. A resposta contem o
 footprint convertido para metros locais, nome, categoria e altura OSM quando disponivel.
 Sem altura, o cliente usa uma altura visual padrao. O Phaser desenha paredes, sombra,
 telhado e detalhes de fachada com uma extrusao 2.5D estilizada; POIs pontuais viram marcos

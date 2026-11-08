@@ -1,7 +1,11 @@
+import math
+
+import pytest
+
 from backend.app import create_app
 from backend.app.config import Config, _jwt_secret
 from backend.app.database import configure_dns_resolver
-from backend.app.osm_features import _overpass_query, parse_osm_elements
+from backend.app.osm_features import _bounds, _overpass_query, parse_osm_elements
 from backend.app.routes import auth, world
 from backend.app.security import create_access_token
 import dns.resolver
@@ -198,6 +202,26 @@ def test_osm_features_parse_named_buildings_and_pois_without_roads():
     assert features[1]["kind"] == "poi"
     assert all(feature["kind"] != "road" for feature in features)
     assert '"highway"' not in _overpass_query({"lat": 0, "lon": 0}, 5000, 5000)
+
+
+def test_osm_query_bounds_cover_exactly_configured_five_kilometers():
+    center = {"lat": 38.72, "lon": -9.14}
+    west, south, east, north = _bounds(center, 5000, 5000)
+    width_m = (east - west) * 111_320 * math.cos(math.radians(center["lat"]))
+    height_m = (north - south) * 111_320
+
+    assert width_m == pytest.approx(5000, abs=0.01)
+    assert height_m == pytest.approx(5000, abs=0.01)
+
+
+def test_osm_query_bounds_never_exceed_five_kilometers():
+    center = {"lat": 38.72, "lon": -9.14}
+    west, south, east, north = _bounds(center, 8000, 9000)
+    width_m = (east - west) * 111_320 * math.cos(math.radians(center["lat"]))
+    height_m = (north - south) * 111_320
+
+    assert width_m == pytest.approx(5000, abs=0.01)
+    assert height_m == pytest.approx(5000, abs=0.01)
 
 
 def test_world_features_returns_named_osm_items_for_configured_event(monkeypatch):
