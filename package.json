@@ -1,0 +1,14 @@
+{
+  "name": "entanglement",
+  "private": true,
+  "workspaces": ["web"],
+  "scripts": {
+    "build": "npm run build --workspace web",
+    "dev": "concurrently -k -n api,web -c yellow,green \"flask --app 'backend.app:create_app()' run --host 0.0.0.0 --port 5000\" \"npm run dev --workspace web\"",
+    "dev:web": "npm run dev --workspace web",
+    "dev:api": "flask --app 'backend.app:create_app()' run --host 0.0.0.0 --port 5000"
+  },
+  "devDependencies": {
+    "concurrently": "^9.2.0"
+  }
+}
