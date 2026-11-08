@@ -32,11 +32,18 @@ que encaminha `/api` para Flask. `npm run dev:web` e `npm run dev:api` iniciam o
 servicos separadamente. Rode `pytest` para os testes da API e `npm run build` para
 validar o cliente de producao.
 
-Configure `MONGODB_URI`, `JWT_SECRET` e `EVENT_ADMIN_TOKEN` no `.env`. Para chat e
+Configure `MONGODB_URI`, `JWT_SECRET` e `EVENT_ADMIN_TOKEN` no `.env`. `JWT_SECRET`
+deve ser uma chave aleatoria longa e exclusiva deste projeto. No desenvolvimento local,
+uma chave efemera e gerada se ela estiver ausente; sessoes expiram ao reiniciar o servidor.
+Na Vercel, configure `JWT_SECRET` explicitamente. Para chat e
 presenca, configure as tres variaveis Supabase e aplique
 [`supabase/realtime_policies.sql`](supabase/realtime_policies.sql) no projeto. Para
 associar email e recuperar senha, configure o servidor SMTP. Sem SMTP, os fluxos de
 email retornam erro de configuracao e nenhuma conta confirma endereco.
+
+Em ambientes sem `/etc/resolv.conf` usando URI `mongodb+srv`, `MONGODB_DNS_NAMESERVERS`
+define os servidores DNS separados por virgula. O padrao `1.1.1.1,8.8.8.8` segue o
+fallback usado no projeto Flutu; ajuste-o se a rede exigir resolvedores diferentes.
 
 Valores `VITE_*` sao incorporados ao bundle e devem ser publicos. Nunca use neles
 segredos JWT, senha SMTP, token administrativo ou chave Supabase `service_role`.

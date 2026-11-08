@@ -1,10 +1,23 @@
 import os
+import secrets
 
 
 class Config:
     MONGODB_URI = os.getenv("MONGODB_URI", "mongodb://localhost:27017")
     MONGODB_DATABASE = os.getenv("MONGODB_DATABASE", "entanglement")
-    JWT_SECRET = os.getenv("JWT_SECRET", "")
+    MONGODB_DNS_NAMESERVERS = (
+        os.getenv("MONGODB_DNS_NAMESERVERS")
+        or os.getenv("MONGODB_DNS_SERVERS")
+        or "1.1.1.1,8.8.8.8"
+    )
+    MONGODB_DNS_SERVERS = [
+        server.strip()
+        for server in MONGODB_DNS_NAMESERVERS.split(",")
+        if server.strip()
+    ]
+    JWT_SECRET = os.getenv("JWT_SECRET") or (
+        secrets.token_urlsafe(48) if os.getenv("VERCEL") != "1" else ""
+    )
     JWT_ACCESS_TOKEN_MINUTES = int(os.getenv("JWT_ACCESS_TOKEN_MINUTES", "60"))
     SUPABASE_URL = os.getenv("SUPABASE_URL", "")
     SUPABASE_ANON_KEY = os.getenv("SUPABASE_ANON_KEY", "")

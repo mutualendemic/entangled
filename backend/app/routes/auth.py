@@ -57,6 +57,8 @@ def register():
         return jsonify({"error": "A senha deve ter pelo menos 10 caracteres"}), 400
     if avatar not in AVATARS:
         return jsonify({"error": "Avatar invalido"}), 400
+    if not current_app.config.get("JWT_SECRET"):
+        return jsonify({"error": "Autenticacao indisponivel: JWT_SECRET nao configurado"}), 503
 
     user = {
         "_id": uuid.uuid4().hex,
@@ -68,12 +70,13 @@ def register():
         "email_verified": False,
         "created_at": datetime.now(timezone.utc),
     }
+    access_token = create_access_token(user)
     try:
         get_database().users.insert_one(user)
     except DuplicateKeyError:
         return jsonify({"error": "Nao foi possivel criar a conta com esses dados"}), 409
 
-    return jsonify({"user": _public_user(user), "token": create_access_token(user)}), 201
+    return jsonify({"user": _public_user(user), "token": access_token}), 201
 
 
 @auth_blueprint.post("/auth/login")
@@ -83,6 +86,8 @@ def login():
     password = body.get("password", "")
     if not username or not isinstance(password, str):
         return jsonify({"error": "Nome ou senha incorretos"}), 401
+    if not current_app.config.get("JWT_SECRET"):
+        return jsonify({"error": "Autenticacao indisponivel: JWT_SECRET nao configurado"}), 503
 
     user = get_database().users.find_one({"username_key": username.casefold()})
     if not user or not verify_password(user["password_hash"], password):
