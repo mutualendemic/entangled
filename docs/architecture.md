@@ -28,6 +28,10 @@ do Supabase e um token de curta duracao emitido pelo servidor para os canais pri
   publicos e referencia a arte versionada no repositorio do jogo.
 - `events`: centro geografico e configuracao da area. O centro e compartilhado por todos
    os participantes do evento.
+- `teleport targets`: POIs e locais marcados no mapa que aparecem em uma lista filtravel por
+  busca; o jogador pode selecionar um destino e teleportar para sua coordenada local no
+  mundo do evento. O mesmo mecanismo aceita teleporte para a leitura GPS atual quando ela
+  estiver disponivel.
 - Presenca, posicoes ao vivo e mensagens nao sao persistidas inicialmente. Supabase
    Broadcast/Presence evita gravar historicos de chat e reduz o uso da cota do banco.
 
@@ -77,6 +81,10 @@ selecionaveis, sem upload de imagem pelos jogadores.
    trilhas, coordenadas ao vivo ou distancias no MongoDB. Descartar estado ao sair/expirar.
    A divisao por tiles e canais separados ainda e proposta; ver
    [world-tiles-and-realtime.md](world-tiles-and-realtime.md).
+- O cliente tambem deve oferecer teleporte manual para pontos conhecidos do mapa: busca por POI
+  nomeado ou edificio, lista de resultados, clique para mover o avatar para a coordenada e um
+  botao "Usar GPS atual" para reposicionar o jogador na localizacao recente do aparelho sem
+  sair do mundo do evento.
 - Pedir permissao somente ao entrar no mundo, explicar o uso para proximidade entre jogadores,
    permitir pausar/optar por sair e nunca expor coordenadas em perfil publico. Aplicar RLS,
    tokens curtos por evento, validacao de idade do dado e limites contra abuso.

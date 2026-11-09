@@ -138,6 +138,19 @@ button:disabled { cursor: wait; opacity: .6; }
 .player-info { display: grid; gap: 4px; min-width: 0; }
 .player-info strong { overflow: hidden; color: #e1e9e1; font-size: 12px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
 .player-info small { color: #98a69a; font: 10px var(--mono); }
+.teleport-panel { display: grid; gap: 10px; margin-top: 18px; padding-top: 12px; border-top: 1px solid #2c3931; }
+.compact-heading { margin-bottom: 0; }
+.teleport-search { display: block; }
+.teleport-search input { min-height: 38px; font-size: 12px; }
+.teleport-button { width: 100%; }
+.poi-list { display: grid; gap: 8px; max-height: 220px; overflow: auto; }
+.poi-item { display: flex; align-items: center; justify-content: space-between; gap: 8px; width: 100%; padding: 8px 10px; border: 1px solid #344138; border-radius: 4px; background: #1a2621; color: #e6efe3; text-align: left; cursor: pointer; }
+.poi-item:hover { border-color: var(--bright); }
+.poi-item strong { display: block; margin-bottom: 2px; font-size: 12px; }
+.poi-item small { color: #99a79c; font: 9px var(--mono); }
+.poi-kind { color: #cbd8c8; font: 9px var(--mono); }
+.poi-empty { margin: 0; color: #9ca8a1; font-size: 11px; }
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
 .message-list { display: flex; flex: 1; flex-direction: column; align-items: stretch; gap: 10px; min-height: 0; overflow-y: auto; padding: 4px 2px 12px; }
 .chat-message { max-width: 95%; padding: 9px 11px; border: 1px solid #303d34; border-radius: 4px; background: #1b2620; }
 .chat-message.mine { align-self: flex-end; border-color: #526946; background: #263528; }

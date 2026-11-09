@@ -246,6 +246,15 @@ async function renderGame(root: HTMLElement, user: User): Promise<void> {
           <section class="panel-content" data-panel-content="players">
             <div class="section-heading"><h2>Por perto</h2><span id="player-count">1 online</span></div>
             <div class="player-list" id="player-list"></div>
+            <div class="teleport-panel">
+              <div class="section-heading compact-heading"><h2>Teleportar</h2><span>POIs</span></div>
+              <label class="teleport-search">
+                <span class="sr-only">Buscar destino</span>
+                <input id="poi-search" type="search" placeholder="Buscar lugar ou POI" autocomplete="off" />
+              </label>
+              <button id="teleport-gps" class="secondary-button teleport-button" type="button">Usar GPS atual</button>
+              <div id="poi-list" class="poi-list" aria-live="polite"></div>
+            </div>
           </section>
           <section class="panel-content hidden" data-panel-content="chat">
             <div class="section-heading"><h2>Conversa do evento</h2><span>temporaria</span></div>
@@ -294,6 +303,9 @@ async function renderGame(root: HTMLElement, user: User): Promise<void> {
   const locationStatus = root.querySelector<HTMLElement>("#location-status")!;
   const cityStatus = root.querySelector<HTMLElement>("#city-status")!;
   const cityRetry = root.querySelector<HTMLButtonElement>("#city-retry")!;
+  const poiSearch = root.querySelector<HTMLInputElement>("#poi-search")!;
+  const poiList = root.querySelector<HTMLElement>("#poi-list")!;
+  const teleportGpsButton = root.querySelector<HTMLButtonElement>("#teleport-gps")!;
   const realtime = new RealtimeSession(
     user,
     (players) => {
@@ -338,6 +350,43 @@ async function renderGame(root: HTMLElement, user: User): Promise<void> {
     }
   }
 
+  function renderPoiList(): void {
+    const query = poiSearch.value.trim().toLowerCase();
+    const results = [...cityFeatures]
+      .filter((feature) => {
+        const text = `${feature.name} ${feature.category}`.toLowerCase();
+        return !query || text.includes(query);
+      })
+      .sort((left, right) => left.name.localeCompare(right.name));
+
+    poiList.replaceChildren();
+    if (!results.length) {
+      const empty = document.createElement("p");
+      empty.className = "poi-empty";
+      empty.textContent = query ? "Nenhum POI encontrado." : "Carregue o mapa do evento para ver locais.";
+      poiList.append(empty);
+      return;
+    }
+
+    for (const feature of results.slice(0, 25)) {
+      const item = document.createElement("button");
+      item.type = "button";
+      item.className = "poi-item";
+      const meta = feature.kind === "building" ? "Edifício" : "POI";
+      item.innerHTML = `<span><strong>${escapeHtml(feature.name)}</strong><small>${meta}</small></span><span class="poi-kind">${escapeHtml(feature.category)}</span>`;
+      item.addEventListener("click", () => {
+        if (!scene) {
+          return;
+        }
+        scene.setLocalMapPosition(feature.x, feature.y);
+        locationStatus.textContent = `Teletransportado para ${feature.name}`;
+        localSource = "local";
+        drawPlayers();
+      });
+      poiList.append(item);
+    }
+  }
+
   async function loadCityFeatures(): Promise<void> {
     cityRetry.hidden = true;
     cityStatus.textContent = "Consultando edifícios e pontos de interesse...";
@@ -345,6 +394,7 @@ async function renderGame(root: HTMLElement, user: User): Promise<void> {
       const result = await apiRequest<{ features: WorldFeature[] }>("/world/features");
       cityFeatures = result.features;
       scene?.setFeatures(cityFeatures);
+      renderPoiList();
       const buildings = cityFeatures.filter((feature) => feature.kind === "building").length;
       const points = cityFeatures.length - buildings;
       cityStatus.textContent = cityFeatures.length
@@ -471,7 +521,40 @@ async function renderGame(root: HTMLElement, user: User): Promise<void> {
   movementStick.addEventListener("pointerup", releaseMovement);
   movementStick.addEventListener("pointercancel", releaseMovement);
 
+  poiSearch.addEventListener("input", renderPoiList);
+  teleportGpsButton.addEventListener("click", () => {
+    if (localGeo) {
+      const projected = scene?.setLocalGeoPosition(localGeo.lat, localGeo.lon);
+      if (projected) {
+        locationStatus.textContent = "Teletransportado para o GPS atual";
+        localSource = "gps";
+        drawPlayers();
+      }
+      return;
+    }
+    if (!navigator.geolocation || !window.isSecureContext) {
+      locationStatus.textContent = "GPS nao disponivel para teleporte imediato.";
+      return;
+    }
+    teleportGpsButton.disabled = true;
+    locationStatus.textContent = "Obtendo GPS para teleporte...";
+    navigator.geolocation.getCurrentPosition(({ coords }) => {
+      const projected = scene?.setLocalGeoPosition(coords.latitude, coords.longitude);
+      if (projected) {
+        localGeo = { lat: coords.latitude, lon: coords.longitude, accuracy: coords.accuracy || 25, timestamp: Date.now() };
+        localSource = "gps";
+        locationStatus.textContent = "Teletransportado para o GPS atual";
+        drawPlayers();
+      }
+      teleportGpsButton.disabled = false;
+    }, () => {
+      locationStatus.textContent = "Nao foi possivel obter a posicao GPS atual.";
+      teleportGpsButton.disabled = false;
+    }, { enableHighAccuracy: true, maximumAge: 30_000, timeout: 15_000 });
+  });
+
   drawPlayers();
+  renderPoiList();
   if (event.center) {
     void loadCityFeatures();
   }
