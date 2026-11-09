@@ -267,7 +267,7 @@ async function renderGame(root: HTMLElement, user: User): Promise<void> {
               <form id="email-form" class="email-form"><label>Email, nao publico<input name="email" type="email" maxlength="254" autocomplete="email" value="${escapeHtml(emailState.email ?? "")}" required /></label><button class="secondary-button" type="submit">${emailState.verified ? "Atualizar email" : "Associar email"}</button><p class="notice" id="email-notice" role="status"></p></form>
             </div>
           </section>
-          <footer class="panel-footer"><span class="avatar-chip avatar-${user.avatar}">${avatarGlyph(user.avatar)}</span><span>Conectado como <strong>${escapeHtml(user.username)}</strong></span></footer>
+          <footer class="panel-footer"><span class="avatar-chip avatar-${user.avatar}">${avatarGlyph(user.avatar)}</span><span>Conectado como <strong>${escapeHtml(user.username)}</strong></span><span class="app-version">#${__APP_VERSION__}</span></footer>
         </aside>
       </div>
     </main>`;

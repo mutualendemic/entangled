@@ -117,11 +117,19 @@ Sem altura, o cliente usa uma altura visual padrao. O Phaser desenha paredes, so
 telhado e detalhes de fachada com uma extrusao 2.5D estilizada; POIs pontuais viram marcos
 com rotulo. Nao renderizar ruas nem um basemap por baixo.
 
+A query usa uma lista permitida de categorias de amenity, shop, tourism, historic, leisure
+e natural; nao inclui tags tecnicas como `stop_position` ou `parking_entrance`. POIs sao
+deduplicados por nome/categoria e proximidade, e a lista final e ordenada de forma estavel.
+
 Atribuir os dados a OpenStreetMap/Overpass de forma visivel e respeitar limites do servico
- persistir a resposta nem as geometrias em colecoes MongoDB. Se Overpass estiver indisponivel,
- manter o mundo jogavel e mostrar estado de erro/retry sem guardar dados cartograficos. A
- consulta e assincrona em relacao a cena Phaser; timeouts do provedor devem ser tratados como
- falha recuperavel, nao como bloqueio de entrada no jogo.
+publico. A API mantem cache efemero em memoria com TTL para evitar repetir a consulta; nao
+persistir a resposta nem as geometrias em colecoes MongoDB. Se os provedores estiverem
+indisponiveis, manter o mundo jogavel e mostrar erro/retry. As APIs OSM publicas nao garantem
+disponibilidade nem aceitam todos os bboxes urbanos; a API de dados pode rejeitar areas
+densas pelo limite de elementos. A ordenacao/deduplicacao torna a lista estavel quando a
+fonte responde, mas nao substitui disponibilidade. Para uso confiavel sem chave de terceiros,
+operar uma instancia Overpass propria ou servir extratos regionais atualizados; nao compensar
+uma rejeicao com dezenas de chamadas a API publica.
 
 ## Estado atual
 

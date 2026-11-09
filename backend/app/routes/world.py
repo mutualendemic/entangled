@@ -72,7 +72,7 @@ def get_world_features():
     try:
         features = get_osm_features(event_id, center, width_m, height_m)
     except OSMUnavailableError as error:
-        current_app.logger.warning("OSM feature query failed (%s)", type(error).__name__)
+        current_app.logger.warning("OSM feature query failed (%s)", error.reason)
         return jsonify({"error": "Os dados de edificios estao temporariamente indisponiveis"}), 503
 
     response = jsonify({"features": features, "attribution": "OpenStreetMap contributors"})

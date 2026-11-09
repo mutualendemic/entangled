@@ -177,6 +177,7 @@ def test_configured_world_dimensions_are_capped_at_five_kilometers():
 
 def test_osm_features_parse_named_buildings_and_pois_without_roads():
     elements = [
+        {"type": "node", "id": 13, "lat": 0.0, "lon": 0.0, "tags": {"amenity": "cafe", "name": "Cafe da Praca"}},
         {
             "type": "way",
             "id": 12,
@@ -189,7 +190,8 @@ def test_osm_features_parse_named_buildings_and_pois_without_roads():
             ],
             "tags": {"building": "museum", "name": "Museu Central", "building:levels": "4"},
         },
-        {"type": "node", "id": 13, "lat": 0.0, "lon": 0.0, "tags": {"amenity": "cafe", "name": "Cafe da Praca"}},
+        {"type": "node", "id": 15, "lat": 0.00005, "lon": 0.00005, "tags": {"amenity": "cafe", "name": "Cafe da Praca"}},
+        {"type": "node", "id": 16, "lat": 0.0001, "lon": 0.0001, "tags": {"railway": "stop_position", "name": "Paragem Central"}},
         {"type": "way", "id": 14, "tags": {"building": "yes"}},
     ]
 
@@ -201,7 +203,47 @@ def test_osm_features_parse_named_buildings_and_pois_without_roads():
     assert len(features[0]["points"]) == 4
     assert features[1]["kind"] == "poi"
     assert all(feature["kind"] != "road" for feature in features)
-    assert '"highway"' not in _overpass_query({"lat": 0, "lon": 0}, 5000, 5000)
+    query = _overpass_query({"lat": 0, "lon": 0}, 5000, 5000)
+    assert '"highway"' not in query
+    assert '"stop_position"' not in query
+    assert 'way["building"]["name"]' in query
+    assert ".pois out center;" in query
+    assert query.index(".pois out center;") < query.index(".buildings out center geom;")
+
+
+def test_osm_feature_limit_preserves_buildings_and_pois():
+    center = {"lat": 0.0, "lon": 0.0}
+    elements = [
+        {
+            "type": "way",
+            "id": index,
+            "center": {"lat": 0.0, "lon": 0.0},
+            "geometry": [
+                {"lat": -0.0001, "lon": -0.0001},
+                {"lat": -0.0001, "lon": 0.0001},
+                {"lat": 0.0001, "lon": 0.0001},
+                {"lat": 0.0001, "lon": -0.0001},
+            ],
+            "tags": {"building": "yes", "name": f"Building {index:03d}"},
+        }
+        for index in range(360)
+    ]
+    elements.extend(
+        {
+            "type": "node",
+            "id": index,
+            "lat": 0.0,
+            "lon": 0.0,
+            "tags": {"amenity": "cafe", "name": f"Cafe {index:03d}"},
+        }
+        for index in range(360)
+    )
+
+    features = parse_osm_elements(elements, center, 5000, 5000)
+
+    assert len(features) == 700
+    assert sum(feature["kind"] == "building" for feature in features) == 350
+    assert sum(feature["kind"] == "poi" for feature in features) == 350
 
 
 def test_osm_query_bounds_cover_exactly_configured_five_kilometers():

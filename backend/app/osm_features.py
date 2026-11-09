@@ -2,6 +2,7 @@ import json
 import math
 import re
 import time
+import unicodedata
 import xml.etree.ElementTree as ET
 import urllib.error
 import urllib.parse
@@ -15,12 +16,32 @@ OSM_MAP_URL = "https://api.openstreetmap.org/api/0.6/map"
 EARTH_RADIUS_METERS = 6_371_000
 MAX_RESPONSE_BYTES = 5 * 1024 * 1024
 MAX_FEATURES = 700
+MAX_BUILDINGS = 350
+MAX_POIS = MAX_FEATURES - MAX_BUILDINGS
 CACHE_TTL_SECONDS = 3600
 MAX_QUERY_EDGE_METERS = 5000
+POI_TAG_VALUES = {
+    "amenity": {
+        "arts_centre", "bar", "cafe", "cinema", "clinic", "community_centre", "dentist",
+        "doctors", "fast_food", "fountain", "hospital", "library", "marketplace",
+        "museum", "pharmacy", "place_of_worship", "police", "post_office", "pub",
+        "restaurant", "school", "theatre", "university",
+    },
+    "shop": {
+        "bakery", "books", "butcher", "clothes", "convenience", "department_store",
+        "gift", "mall", "supermarket",
+    },
+    "tourism": {"attraction", "gallery", "guest_house", "hostel", "hotel", "museum", "viewpoint", "zoo"},
+    "historic": {"archaeological_site", "castle", "fort", "memorial", "monument", "ruins", "wayside_cross"},
+    "leisure": {"garden", "park", "playground", "sports_centre", "stadium"},
+    "natural": {"cave_entrance", "peak", "spring", "waterfall"},
+}
 
 
 class OSMUnavailableError(Exception):
-    pass
+    def __init__(self, reason):
+        self.reason = reason
+        super().__init__(reason)
 
 
 def project_coordinates(latitude, longitude, center, width_m, height_m):
@@ -83,11 +104,13 @@ def _height_m(tags):
 def parse_osm_elements(elements, center, width_m, height_m):
     features = []
     seen = set()
+    nearby_names = {}
     for element in elements:
         tags = element.get("tags", {})
         kind = "building" if tags.get("building") else "poi"
         name = str(tags.get("name", "")).strip()
-        if not name:
+        category = _feature_category(tags, kind)
+        if not name or (kind == "poi" and not category):
             continue
 
         feature_id = f"{element.get('type', 'feature')}/{element.get('id', len(features))}"
@@ -127,12 +150,20 @@ def parse_osm_elements(elements, center, width_m, height_m):
             if not 0 <= x <= width_m or not 0 <= y <= height_m:
                 continue
 
+        normalized_name = " ".join(unicodedata.normalize("NFKC", name).casefold().split())
+        duplicate_key = (kind, normalized_name, category)
+        if any(
+            math.hypot(x - previous_x, y - previous_y) <= 25
+            for previous_x, previous_y in nearby_names.get(duplicate_key, [])
+        ):
+            continue
+        nearby_names.setdefault(duplicate_key, []).append((x, y))
+
         feature = {
             "id": feature_id,
             "name": name,
             "kind": kind,
-            "category": tags.get("building") or tags.get("amenity") or tags.get("shop")
-            or tags.get("tourism") or tags.get("historic") or tags.get("leisure", ""),
+            "category": category,
             "x": x,
             "y": y,
             "points": points,
@@ -140,24 +171,43 @@ def parse_osm_elements(elements, center, width_m, height_m):
         if kind == "building":
             feature["height_m"] = _height_m(tags)
         features.append(feature)
-        if len(features) >= MAX_FEATURES:
-            break
-    return features
+
+    sort_key = lambda feature: (feature["name"].casefold(), feature["id"])
+    buildings = sorted((feature for feature in features if feature["kind"] == "building"), key=sort_key)
+    pois = sorted((feature for feature in features if feature["kind"] == "poi"), key=sort_key)
+    selected = buildings[:MAX_BUILDINGS] + pois[:MAX_POIS]
+    remaining = MAX_FEATURES - len(selected)
+    if remaining:
+        selected.extend(buildings[MAX_BUILDINGS:MAX_BUILDINGS + remaining])
+        remaining = MAX_FEATURES - len(selected)
+    if remaining:
+        selected.extend(pois[MAX_POIS:MAX_POIS + remaining])
+    return sorted(selected, key=lambda feature: (feature["kind"], feature["name"].casefold(), feature["id"]))
+
+
+def _feature_category(tags, kind):
+    if kind == "building":
+        return tags.get("building", "building")
+    for key, values in POI_TAG_VALUES.items():
+        value = tags.get(key)
+        if value in values:
+            return value
+    return ""
 
 
 def _overpass_query(center, width_m, height_m):
     west, south, east, north = _bounds(center, width_m, height_m)
     bounds = f"{south},{west},{north},{east}"
+    poi_queries = "".join(
+        f'nwr["{key}"~"^({"|".join(sorted(values))})$"]["name"]({bounds});'
+        for key, values in sorted(POI_TAG_VALUES.items())
+    )
     return (
-        "[out:json][timeout:18];("
-        f'way["building"]["name"]({bounds});'
-        f'relation["building"]["name"]({bounds});'
-        f'nwr["amenity"]["name"]({bounds});'
-        f'nwr["shop"]["name"]({bounds});'
-        f'nwr["tourism"]["name"]({bounds});'
-        f'nwr["historic"]["name"]({bounds});'
-        f'nwr["leisure"]["name"]({bounds});'
-        ");out center geom;"
+        "[out:json][timeout:8];"
+        f'(way["building"]["name"]({bounds});relation["building"]["name"]({bounds});)->.buildings;'
+        f"({poi_queries})->.pois;"
+        ".pois out center;"
+        ".buildings out center geom;"
     )
 
 
@@ -177,17 +227,19 @@ def _bounds(center, width_m, height_m):
 def _fetch_elements(center, width_m, height_m):
     payload = urllib.parse.urlencode({"data": _overpass_query(center, width_m, height_m)}).encode()
     request = urllib.request.Request(
-        OVERPASS_URL,
+        current_app.config.get("OSM_OVERPASS_URL", OVERPASS_URL),
         data=payload,
-            headers={
-                "Content-Type": "application/x-www-form-urlencoded",
-                "User-Agent": "Entanglement/0.1 (https://github.com/mutualendemic/entangled)",
-            },
+        headers={
+            "Content-Type": "application/x-www-form-urlencoded",
+            "User-Agent": "Entanglement/0.1 (https://github.com/mutualendemic/entangled)",
+        },
         method="POST",
     )
     try:
         with urllib.request.urlopen(request, timeout=6) as response:
             raw = response.read(MAX_RESPONSE_BYTES + 1)
+    except urllib.error.HTTPError as error:
+        raise OSMUnavailableError(f"HTTP_{error.code}") from error
     except (urllib.error.URLError, TimeoutError, OSError) as error:
         raise OSMUnavailableError(type(error).__name__) from error
     if len(raw) > MAX_RESPONSE_BYTES:
@@ -214,6 +266,8 @@ def _fetch_osm_map_features(center, width_m, height_m):
     try:
         with urllib.request.urlopen(request, timeout=6) as response:
             raw = response.read(MAX_RESPONSE_BYTES + 1)
+    except urllib.error.HTTPError as error:
+        raise OSMUnavailableError(f"HTTP_{error.code}") from error
     except (urllib.error.URLError, TimeoutError, OSError) as error:
         raise OSMUnavailableError(type(error).__name__) from error
     if len(raw) > MAX_RESPONSE_BYTES:
@@ -272,8 +326,13 @@ def get_osm_features(event_id, center, width_m, height_m):
         return cached[1]
     try:
         features = parse_osm_elements(_fetch_elements(center, width_m, height_m), center, width_m, height_m)
-    except OSMUnavailableError:
-        features = _fetch_osm_map_features(center, width_m, height_m)
+    except OSMUnavailableError as overpass_error:
+        try:
+            features = _fetch_osm_map_features(center, width_m, height_m)
+        except OSMUnavailableError as fallback_error:
+            raise OSMUnavailableError(
+                f"Overpass_{overpass_error.reason};OSM_MAP_{fallback_error.reason}"
+            ) from fallback_error
     cache[key] = (now + CACHE_TTL_SECONDS, features)
     if len(cache) > 24:
         for expired_key in [cache_key for cache_key, value in cache.items() if value[0] <= now]:

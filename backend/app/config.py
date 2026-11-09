@@ -42,6 +42,10 @@ class Config:
     SUPABASE_URL = os.getenv("SUPABASE_URL", "")
     SUPABASE_ANON_KEY = os.getenv("SUPABASE_ANON_KEY", "")
     SUPABASE_JWT_SECRET = os.getenv("SUPABASE_JWT_SECRET", "")
+    OSM_OVERPASS_URL = os.getenv(
+        "OSM_OVERPASS_URL",
+        "https://overpass.openstreetmap.fr/api/interpreter",
+    )
     APP_ORIGIN = os.getenv("APP_ORIGIN", "http://localhost:5173")
     EVENT_ID = os.getenv("EVENT_ID", "local-event")
     EVENT_ADMIN_TOKEN = os.getenv("EVENT_ADMIN_TOKEN", "")
