@@ -41,6 +41,7 @@ export interface RemotePlayer {
 }
 
 const PLAYER_SPEED = 120;
+const WORLD_CAMERA_ZOOM = 0.5;
 const EARTH_RADIUS_M = 6_371_000;
 const AVATAR_COLORS: Record<string, number> = {
   moss: 0x9de2b1,
@@ -86,7 +87,7 @@ export class WorldScene extends Phaser.Scene {
 
   create(): void {
     this.cityGraphics = this.add.graphics();
-    this.cameras.main.setZoom(0.65);
+    this.cameras.main.setZoom(WORLD_CAMERA_ZOOM);
     this.drawCity();
     this.drawLocations();
     this.player = this.makePlayer(0x9de2b1, "Voce");
@@ -140,6 +141,7 @@ export class WorldScene extends Phaser.Scene {
       height_m: Math.min(world.height_m, 5000),
     };
     this.cityFeatures = [];
+    this.cameras.main.setZoom(WORLD_CAMERA_ZOOM);
     this.drawCity();
     this.drawLocations();
     this.playerX = this.world.width_m / 2;
