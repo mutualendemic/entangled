@@ -40,7 +40,7 @@ export interface RemotePlayer {
   source?: "gps" | "ble" | "local";
 }
 
-const PLAYER_SPEED = 2.2;
+const PLAYER_SPEED = 120;
 const EARTH_RADIUS_M = 6_371_000;
 const AVATAR_COLORS: Record<string, number> = {
   moss: 0x9de2b1,
