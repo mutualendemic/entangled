@@ -8,6 +8,7 @@ from pymongo.errors import DuplicateKeyError
 from backend.app.database import get_database
 from backend.app.osm_features import OSMUnavailableError, get_osm_features
 from backend.app.security import require_auth
+from backend.app.world_tiles import CELL_SIZE_METERS, tile_center, valid_tile_index
 
 
 world_blueprint = Blueprint("world", __name__)
@@ -27,12 +28,28 @@ def _valid_coordinate(latitude, longitude) -> bool:
 
 
 def _world_dimensions(event: dict) -> tuple[float, float]:
-    if not event.get("center"):
-        return MAX_WORLD_EDGE_METERS, MAX_WORLD_EDGE_METERS
-    return (
-        min(float(event.get("width_m", MAX_WORLD_EDGE_METERS)), MAX_WORLD_EDGE_METERS),
-        min(float(event.get("height_m", MAX_WORLD_EDGE_METERS)), MAX_WORLD_EDGE_METERS),
-    )
+    return CELL_SIZE_METERS, CELL_SIZE_METERS
+
+
+def _request_tile_indices(body: object) -> tuple[int, int] | None:
+    if not isinstance(body, dict):
+        return None
+    tile_x = body.get("tile_x", 0)
+    tile_y = body.get("tile_y", 0)
+    if not valid_tile_index(tile_x) or not valid_tile_index(tile_y):
+        return None
+    return tile_x, tile_y
+
+
+def _query_tile_indices() -> tuple[int, int] | None:
+    try:
+        tile_x = int(request.args.get("tile_x", "0"))
+        tile_y = int(request.args.get("tile_y", "0"))
+    except ValueError:
+        return None
+    if not valid_tile_index(tile_x) or not valid_tile_index(tile_y):
+        return None
+    return tile_x, tile_y
 
 
 @world_blueprint.get("/world")
@@ -53,22 +70,66 @@ def get_world():
         event.setdefault("locations", [])
         event.setdefault("beacons", [])
     event["width_m"], event["height_m"] = _world_dimensions(event)
+    event["tile_x"] = 0
+    event["tile_y"] = 0
     return jsonify({"event_id": event_id, "event": event}), 200
+
+
+@world_blueprint.post("/world/tile")
+@require_auth
+def authorize_world_tile():
+    tile_indices = _request_tile_indices(request.get_json(silent=True))
+    if tile_indices is None:
+        return jsonify({"error": "Coordenadas de tile invalidas"}), 400
+
+    event = get_database().events.find_one(
+        {"_id": current_app.config["EVENT_ID"]},
+        {"center": 1},
+    ) or {}
+    center = event.get("center")
+    if not isinstance(center, dict) or not _valid_coordinate(center.get("lat"), center.get("lon")):
+        return jsonify({"error": "Defina o centro do evento antes de mudar de tile"}), 409
+
+    try:
+        center = tile_center(center, *tile_indices)
+    except ValueError:
+        return jsonify({"error": "Tile fora da area geografica suportada"}), 400
+    if not _valid_coordinate(center.get("lat"), center.get("lon")):
+        return jsonify({"error": "Tile fora da area geografica suportada"}), 400
+
+    return jsonify({
+        "tile_x": tile_indices[0],
+        "tile_y": tile_indices[1],
+        "center": center,
+        "width_m": CELL_SIZE_METERS,
+        "height_m": CELL_SIZE_METERS,
+    }), 200
 
 
 @world_blueprint.get("/world/features")
 @require_auth
 def get_world_features():
+    tile_indices = _query_tile_indices()
+    if tile_indices is None:
+        return jsonify({"error": "Coordenadas de tile invalidas"}), 400
+
     event_id = current_app.config["EVENT_ID"]
     event = get_database().events.find_one(
         {"_id": event_id},
         {"center": 1, "width_m": 1, "height_m": 1},
     ) or {}
-    center = event.get("center")
-    if not isinstance(center, dict) or not _valid_coordinate(center.get("lat"), center.get("lon")):
+    event_center = event.get("center")
+    if not isinstance(event_center, dict) or not _valid_coordinate(event_center.get("lat"), event_center.get("lon")):
         return jsonify({"error": "Defina o centro do evento antes de carregar edificios"}), 409
 
-    width_m, height_m = _world_dimensions(event)
+    try:
+        center = tile_center(event_center, *tile_indices)
+    except ValueError:
+        return jsonify({"error": "Tile fora da area geografica suportada"}), 400
+    if not _valid_coordinate(center.get("lat"), center.get("lon")):
+        return jsonify({"error": "Tile fora da area geografica suportada"}), 400
+
+    width_m = height_m = CELL_SIZE_METERS
     try:
         features = get_osm_features(event_id, center, width_m, height_m)
     except OSMUnavailableError as error:
@@ -223,9 +284,18 @@ def update_event():
         "beacons": safe_beacons,
         "updated_at": datetime.now(timezone.utc),
     }
-    get_database().events.replace_one(
-        {"_id": current_app.config["EVENT_ID"]}, {"_id": current_app.config["EVENT_ID"], **event}, upsert=True
-    )
+    event_id = current_app.config["EVENT_ID"]
+    try:
+        get_database().events.replace_one(
+            {
+                "_id": event_id,
+                "$or": [{"center": event["center"]}, {"center": None}],
+            },
+            {"_id": event_id, **event},
+            upsert=True,
+        )
+    except DuplicateKeyError:
+        return jsonify({"error": "O centro do evento nao pode ser alterado apos a criacao dos tiles"}), 409
     return jsonify({"event_id": current_app.config["EVENT_ID"], "event": event}), 200
 
 
@@ -235,6 +305,9 @@ def realtime_token():
     secret = current_app.config["SUPABASE_JWT_SECRET"]
     if not secret:
         return jsonify({"error": "Supabase Realtime nao esta configurado"}), 503
+    tile_indices = _request_tile_indices(request.get_json(silent=True) or {})
+    if tile_indices is None:
+        return jsonify({"error": "Coordenadas de tile invalidas"}), 400
     event = get_database().events.find_one(
         {"_id": current_app.config["EVENT_ID"]},
         {"width_m": 1, "height_m": 1},
@@ -252,6 +325,8 @@ def realtime_token():
             "event_id": current_app.config["EVENT_ID"],
             "event_width_m": width_m,
             "event_height_m": height_m,
+            "tile_x": tile_indices[0],
+            "tile_y": tile_indices[1],
             "iat": now,
             "exp": now + timedelta(minutes=10),
         },
@@ -262,6 +337,6 @@ def realtime_token():
         {
             "token": token,
             "expires_in": 600,
-            "channel": f"event:{current_app.config['EVENT_ID']}",
+            "channel": f"event:{current_app.config['EVENT_ID']}:tile:{tile_indices[0]}:{tile_indices[1]}",
         }
     ), 200

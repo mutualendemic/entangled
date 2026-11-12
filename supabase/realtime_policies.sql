@@ -1,11 +1,16 @@
 alter table realtime.messages enable row level security;
 
+drop policy if exists "event members can receive private realtime messages" on realtime.messages;
+drop policy if exists "event members can send private realtime messages" on realtime.messages;
+
 create policy "event members can receive private realtime messages"
 on realtime.messages
 for select
 to authenticated
 using (
   realtime.topic() = 'event:' || (select auth.jwt() ->> 'event_id')
+    || ':tile:' || (select auth.jwt() ->> 'tile_x')
+    || ':' || (select auth.jwt() ->> 'tile_y')
 );
 
 create policy "event members can send private realtime messages"
@@ -14,6 +19,8 @@ for insert
 to authenticated
 with check (
   realtime.topic() = 'event:' || (select auth.jwt() ->> 'event_id')
+    || ':tile:' || (select auth.jwt() ->> 'tile_x')
+    || ':' || (select auth.jwt() ->> 'tile_y')
   and (
     (
       payload ? 'id'

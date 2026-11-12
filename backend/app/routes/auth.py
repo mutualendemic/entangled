@@ -7,6 +7,7 @@ from flask import Blueprint, current_app, g, jsonify, request
 from pymongo.errors import DuplicateKeyError
 
 from backend.app.database import get_database
+from backend.app.avatars import AVATARS
 from backend.app.email_service import send_action_email
 from backend.app.security import (
     create_access_token,
@@ -19,7 +20,6 @@ from backend.app.security import (
 
 
 auth_blueprint = Blueprint("auth", __name__)
-AVATARS = {"moss", "ember", "wave", "sun", "comet", "bloom"}
 USERNAME_PATTERN = re.compile(r"^[a-zA-Z0-9_]{3,24}$")
 EMAIL_PATTERN = re.compile(r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
 PASSWORD_MIN_LENGTH = 10

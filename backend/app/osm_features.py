@@ -18,8 +18,13 @@ MAX_RESPONSE_BYTES = 5 * 1024 * 1024
 MAX_FEATURES = 700
 MAX_BUILDINGS = 350
 MAX_POIS = MAX_FEATURES - MAX_BUILDINGS
+MAX_WATER_FEATURES = 100
 CACHE_TTL_SECONDS = 3600
 MAX_QUERY_EDGE_METERS = 5000
+WATER_TAG_VALUES = {
+    "basin", "canal", "dock", "lake", "lagoon", "moat", "ocean", "pond",
+    "reservoir", "river", "riverbank", "sea", "wastewater",
+}
 POI_TAG_VALUES = {
     "amenity": {
         "arts_centre", "bar", "cafe", "cinema", "clinic", "community_centre", "dentist",
@@ -90,6 +95,146 @@ def _clip_polygon(points, width_m, height_m):
     return clipped
 
 
+def _clip_segment(first, second, width_m, height_m):
+    delta_x = second[0] - first[0]
+    delta_y = second[1] - first[1]
+    start = 0.0
+    end = 1.0
+    for direction, distance in (
+        (-delta_x, first[0]),
+        (delta_x, width_m - first[0]),
+        (-delta_y, first[1]),
+        (delta_y, height_m - first[1]),
+    ):
+        if direction == 0:
+            if distance < 0:
+                return None
+            continue
+        amount = distance / direction
+        if direction < 0:
+            if amount > end:
+                return None
+            start = max(start, amount)
+        else:
+            if amount < start:
+                return None
+            end = min(end, amount)
+    return (
+        (first[0] + start * delta_x, first[1] + start * delta_y),
+        (first[0] + end * delta_x, first[1] + end * delta_y),
+    )
+
+
+def _boundary_position(point, width_m, height_m):
+    x, y = point
+    tolerance = 1e-5
+    perimeter = 2 * (width_m + height_m)
+    if abs(y) <= tolerance:
+        return x
+    if abs(x - width_m) <= tolerance:
+        return width_m + y
+    if abs(y - height_m) <= tolerance:
+        return width_m + height_m + width_m - x
+    if abs(x) <= tolerance:
+        return 2 * width_m + height_m + height_m - y
+    return None
+
+
+def _boundary_point(position, width_m, height_m):
+    perimeter = 2 * (width_m + height_m)
+    position %= perimeter
+    if position <= width_m:
+        return position, 0
+    if position <= width_m + height_m:
+        return width_m, position - width_m
+    if position <= 2 * width_m + height_m:
+        return 2 * width_m + height_m - position, height_m
+    return 0, perimeter - position
+
+
+def _boundary_route(start, end, width_m, height_m, clockwise):
+    perimeter = 2 * (width_m + height_m)
+    start_position = _boundary_position(start, width_m, height_m)
+    end_position = _boundary_position(end, width_m, height_m)
+    if start_position is None or end_position is None:
+        return []
+
+    corners = [0, width_m, width_m + height_m, 2 * width_m + height_m]
+    if clockwise:
+        target = end_position if end_position > start_position else end_position + perimeter
+        corner_positions = sorted(
+            corner + lap * perimeter
+            for corner in corners
+            for lap in range(-1, 3)
+            if start_position < corner + lap * perimeter < target
+        )
+    else:
+        target = end_position if end_position < start_position else end_position - perimeter
+        corner_positions = sorted(
+            (
+                corner + lap * perimeter
+                for corner in corners
+                for lap in range(-2, 2)
+                if target < corner + lap * perimeter < start_position
+            ),
+            reverse=True,
+        )
+    return [start, *(_boundary_point(position, width_m, height_m) for position in corner_positions), end]
+
+
+def _signed_area(points):
+    return sum(
+        first[0] * second[1] - second[0] * first[1]
+        for first, second in zip(points, points[1:] + points[:1])
+    ) / 2
+
+
+def _coastline_water_polygons(points, width_m, height_m):
+    chains = []
+    chain = []
+    for first, second in zip(points, points[1:]):
+        segment = _clip_segment(first, second, width_m, height_m)
+        if segment is None:
+            if len(chain) >= 2:
+                chains.append(chain)
+            chain = []
+            continue
+        clipped_first, clipped_second = segment
+        if chain and math.dist(chain[-1], clipped_first) <= 1e-4:
+            if math.dist(chain[-1], clipped_second) > 1e-4:
+                chain.append(clipped_second)
+        else:
+            if len(chain) >= 2:
+                chains.append(chain)
+            chain = [clipped_first, clipped_second]
+    if len(chain) >= 2:
+        chains.append(chain)
+
+    polygons = []
+    for coastline in chains:
+        routes = (
+            _boundary_route(coastline[-1], coastline[0], width_m, height_m, True),
+            _boundary_route(coastline[-1], coastline[0], width_m, height_m, False),
+        )
+        candidates = [coastline + route[1:] for route in routes if route]
+        sea_polygon = next((polygon for polygon in candidates if _signed_area(polygon) > 0), None)
+        if sea_polygon and abs(_signed_area(sea_polygon)) > 1:
+            polygons.append(sea_polygon)
+    return polygons
+
+
+def _water_category(tags):
+    if tags.get("natural") == "coastline":
+        return "sea"
+    if tags.get("natural") == "water":
+        return tags.get("water", "water")
+    if tags.get("water") in WATER_TAG_VALUES:
+        return tags["water"]
+    if tags.get("waterway") == "riverbank":
+        return "river"
+    return ""
+
+
 def _height_m(tags):
     for key in ("height", "building:height"):
         match = re.match(r"\s*(\d+(?:\.\d+)?)", str(tags.get(key, "")))
@@ -107,6 +252,44 @@ def parse_osm_elements(elements, center, width_m, height_m):
     nearby_names = {}
     for element in elements:
         tags = element.get("tags", {})
+        water_category = _water_category(tags)
+        if water_category:
+            coastline = tags.get("natural") == "coastline"
+            points = []
+            for node in element.get("geometry") or []:
+                try:
+                    points.append(project_coordinates(
+                        float(node["lat"]), float(node["lon"]), center, width_m, height_m
+                    ))
+                except (KeyError, TypeError, ValueError):
+                    continue
+
+            polygons = _coastline_water_polygons(points, width_m, height_m) if coastline else [_clip_polygon(points, width_m, height_m)]
+            base_id = f"{element.get('type', 'feature')}/{element.get('id', len(features))}"
+            for polygon_index, polygon in enumerate(polygons):
+                if len(polygon) < 3:
+                    continue
+                x = sum(point[0] for point in polygon) / len(polygon)
+                y = sum(point[1] for point in polygon) / len(polygon)
+                feature = {
+                    "id": f"{base_id}:water:{polygon_index}",
+                    "name": str(tags.get("name", "")) or "Water",
+                    "kind": "water",
+                    "category": water_category,
+                    "x": x,
+                    "y": y,
+                    "points": polygon,
+                }
+                duplicate_key = ("water", feature["name"].casefold(), water_category)
+                if any(
+                    math.hypot(x - previous_x, y - previous_y) <= 25
+                    for previous_x, previous_y in nearby_names.get(duplicate_key, [])
+                ):
+                    continue
+                nearby_names.setdefault(duplicate_key, []).append((x, y))
+                features.append(feature)
+            continue
+
         kind = "building" if tags.get("building") else "poi"
         name = str(tags.get("name", "")).strip()
         category = _feature_category(tags, kind)
@@ -173,9 +356,10 @@ def parse_osm_elements(elements, center, width_m, height_m):
         features.append(feature)
 
     sort_key = lambda feature: (feature["name"].casefold(), feature["id"])
+    waters = sorted((feature for feature in features if feature["kind"] == "water"), key=sort_key)
     buildings = sorted((feature for feature in features if feature["kind"] == "building"), key=sort_key)
     pois = sorted((feature for feature in features if feature["kind"] == "poi"), key=sort_key)
-    selected = buildings[:MAX_BUILDINGS] + pois[:MAX_POIS]
+    selected = waters[:MAX_WATER_FEATURES] + buildings[:MAX_BUILDINGS] + pois[:MAX_POIS]
     remaining = MAX_FEATURES - len(selected)
     if remaining:
         selected.extend(buildings[MAX_BUILDINGS:MAX_BUILDINGS + remaining])
@@ -188,6 +372,8 @@ def parse_osm_elements(elements, center, width_m, height_m):
 def _feature_category(tags, kind):
     if kind == "building":
         return tags.get("building", "building")
+    if kind == "water":
+        return _water_category(tags)
     for key, values in POI_TAG_VALUES.items():
         value = tags.get(key)
         if value in values:
@@ -202,10 +388,14 @@ def _overpass_query(center, width_m, height_m):
         f'nwr["{key}"~"^({"|".join(sorted(values))})$"]["name"]({bounds});'
         for key, values in sorted(POI_TAG_VALUES.items())
     )
+    water_values = "|".join(sorted(WATER_TAG_VALUES))
     return (
         "[out:json][timeout:8];"
         f'(way["building"]["name"]({bounds});relation["building"]["name"]({bounds});)->.buildings;'
+        f'(way["natural"="water"]({bounds});way["natural"="coastline"]({bounds});'
+        f'way["water"~"^({water_values})$"]({bounds});)->.waters;'
         f"({poi_queries})->.pois;"
+        ".waters out geom;"
         ".pois out center;"
         ".buildings out center geom;"
     )
@@ -299,7 +489,8 @@ def _fetch_osm_map_features(center, width_m, height_m):
         tags = {tag.attrib.get("k", ""): tag.attrib.get("v", "") for tag in way.findall("tag")}
         named_building = bool(tags.get("building") and tags.get("name"))
         named_poi = bool(tags.get("name") and poi_keys.intersection(tags))
-        if not (named_building or named_poi):
+        water = bool(_water_category(tags))
+        if not (named_building or named_poi or water):
             continue
         geometry = [nodes[ref.attrib["ref"]] for ref in way.findall("nd") if ref.attrib.get("ref") in nodes]
         if not geometry:

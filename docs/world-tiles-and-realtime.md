@@ -6,11 +6,11 @@ Manter um documento de arquitetura geral e este documento de detalhe e a divisao
 recomendada. A arquitetura geral registra decisoes estaveis entre servicos; este ADR
 especifica o particionamento espacial, a conexao de jogadores e as conversas locais.
 
-Um evento pode ocupar varias celulas logicas de 5 × 5 km. Cada celula tem um identificador
-estavel dentro do evento, jogadores/presenca temporarios e uma conversa propria. Celulas
-adjacentes continuam conectadas: ao atravessar uma borda, o jogador muda de celula sem
-sair do evento nem perder a sessao. Celulas a mais de uma borda de distancia nao recebem
-posicoes umas das outras.
+Um evento ocupa celulas logicas contiguas de 5 × 5 km, indexadas em relacao ao centro
+geografico compartilhado, definido uma vez e imutavel depois da criacao. Cada celula tem presenca e conversa temporarias
+proprias. Ao cruzar a borda, o cliente encerra imediatamente a comunicacao com a celula
+anterior, solicita autorizacao para a proxima e entra somente no canal da nova celula.
+Jogadores e mensagens de outras celulas nao sao compartilhados, inclusive nas adjacentes.
 
 Uma celula nao e um servidor, deploy ou banco separado. Os dados persistentes continuam
 no mesmo evento/MongoDB; o particionamento e uma estrategia de roteamento de canais
@@ -25,8 +25,9 @@ nao inferir essa regra apenas pelo indice do tile.
 
 ## Dados OSM e celulas do jogo
 
-  O recorte inclui edificios nomeados e POIs; nao consulta vias nem carrega imagens OSM.
-  O Phaser desenha os footprints como volumes 2.5D e coloca nomes sobre os edificios.
+  O recorte inclui edificios nomeados, POIs e corpos d'agua; nao consulta vias nem carrega
+  imagens OSM. O Phaser desenha agua e footprints como volumes 2.5D e coloca nomes sobre os
+  edificios. Uma imagem satelite Esri/Maxar pode ser carregada sob demanda como camada de fundo.
  **Feature OSM:** geometria, tags e nome consultados sob demanda pela API via Overpass.
 uma celula de jogo. O identificador logico depende do evento e da coordenada da celula.
  **Celula do mundo:** area logica fixa de 5 × 5 km para dividir presenca e conversas.
@@ -52,52 +53,50 @@ calcular tile a partir de pixels, zoom ou tiles cartograficos OSM. Para eventos 
 extensos, substituir a projecao local por uma projecao geodesica adequada e versionar essa
 mudanca, pois ela altera os limites das celulas.
 
-O viewport Phaser e limitado a celula atual. Perto de uma borda, pode carregar as features
-da celula vizinha para a transicao; o jogador nao deve ser teletransportado nem bloqueado
-na borda. O estado local e expresso em coordenadas da celula e convertido ao trocar de
-celula, preservando a posicao geografica.
+O viewport Phaser e limitado a celula atual. Ao cruzar uma borda, o movimento pausa, o
+cliente encerra o canal atual e solicita `POST /api/world/tile` para autorizar o destino.
+Depois da resposta, carrega as features desse tile e converte a posicao local, preservando
+a coordenada geografica sem teletransportar o jogador para o centro. Se a autorizacao
+falhar, o jogador permanece na borda e pode continuar na celula anterior. Arrastar o
+viewport desloca somente a camera dentro dos limites da celula; joystick, GPS e BLE continuam
+controlando a posicao do avatar. Um comando separado recentraliza a camera no jogador.
+O limite geografico do tile e desenhado em amarelo dentro da cena, com espessura ajustada
+ao zoom para continuar visivel no enquadramento completo de 5 km.
+Os controles incluem enquadrar toda a celula de 5 km e abrir a viewport Phaser em tela cheia;
+o navegador restaura o layout normal ao sair da tela cheia.
 
 ## Canais e conversas
 
-Separar presenca de conversa, mesmo quando ambos pertencem ao mesmo tile. Topicos
-privados sugeridos:
+Cada tile usa um topico privado exclusivo para presenca, posicoes e conversa:
 
 ```text
-event:<event_id>:tile:<tile_x>:<tile_y>:presence
-event:<event_id>:tile:<tile_x>:<tile_y>:chat
+event:<event_id>:tile:<tile_x>:<tile_y>
 ```
 
-- O jogador publica sua posicao e estado de presenca no canal de presenca da celula atual.
-- Cada celula tem uma conversa efemera propria no canal `chat`; mensagens nao sao
-  persistidas no MongoDB. Chat de uma celula nao e retransmitido automaticamente para
-  outras celulas. Um canal de anuncios do evento pode ser adicionado separadamente.
-- Para mostrar movimento contiguo na borda, o cliente assina presenca da celula atual e
-  das celulas vizinhas que intersectam o raio visual configurado. Assina chat somente da
-  celula atual, salvo escolha explicita de outro canal.
-- O raio visual deve ser aplicado ao fanout/autorizacao, nao apenas a renderizacao no
-  cliente. Uma politica que permite ler um topico vizinho expoe os broadcasts daquele
-  topico aos seus assinantes, mesmo que o cliente esconda jogadores distantes. Se a
-  privacidade exigir um limite rigoroso, usar microcelulas de presenca ou um relay que
-  encaminhe posicoes apenas aos destinatarios no raio; manter a conversa no tile de 5 km.
-- Deduplicar jogadores que aparecam por duas assinaturas de fronteira, descartar updates
-  antigos e remover estados ao sair/expirar a assinatura.
-- Ao mudar de celula, assinar a nova celula, publicar estado inicial, manter uma curta
-  sobreposicao de presenca e so entao remover a assinatura antiga. Isso evita um intervalo
-  em que o jogador desaparece.
+- O jogador publica posicao, estado de presenca e conversa efemera no topico exclusivo da
+  celula atual. Mensagens e posicoes nao sao persistidas no MongoDB.
+- O cliente assina exatamente um tile. Nao existem assinaturas de vizinhos, sobreposicao
+  entre canais ou retransmissao de mensagens entre celulas.
+- Ao detectar a fronteira, o cliente remove a assinatura antiga antes de requisitar a
+  autorizacao do novo tile. Assim, a comunicacao antiga cessa imediatamente; durante a
+  autorizacao/carregamento pode haver um curto periodo sem Realtime.
+- Ao sair, limpar imediatamente jogadores remotos e mensagens mantidos no cliente. Ao
+  entrar no novo tile, publicar nova presenca e posicao apenas depois de assinar seu canal.
 
-Assim, jogadores a mais de 5 km podem estar em celulas e canais diferentes dentro do mesmo
-evento. Eles nao precisam ver a posicao nem receber a conversa local uns dos outros. Ao se
-aproximarem ou atravessarem celulas adjacentes, a presenca reaparece via os canais de
-borda; nao sao instancias independentes do aplicativo.
+Assim, jogadores em tiles diferentes do mesmo evento nao veem as posicoes nem recebem as
+conversas uns dos outros. A comunicacao so volta quando ambos estao autorizados e conectados
+ao mesmo tile; nao ha canais de borda ou visibilidade cruzada.
 
 ## Autorizacao e privacidade
 
-- `POST /api/realtime/token` deve emitir JWT curto vinculado a `sub`, `event_id`, celula
-  atual e celulas de presenca adjacentes autorizadas. O cliente nao pode escolher um
-  `event_id` arbitrario nem assinar topicos publicos.
-- As politicas RLS devem comparar `realtime.topic()` com os claims do token. Para chat,
-  autorizar apenas a celula atual; para presenca, autorizar somente a celula atual e os
-  vizinhos concedidos pelo servidor.
+- `POST /api/world/tile` valida o indice da celula dentro do evento autenticado. O cliente
+  nao pode trocar o `event_id`; indices fora do limite ou centros geograficos invalidos
+  sao recusados.
+- `POST /api/realtime/token` emite JWT curto vinculado a `sub`, `event_id`, `tile_x` e
+  `tile_y`. O topico retornado e exatamente `event:<event_id>:tile:<tile_x>:<tile_y>`.
+- As politicas RLS comparam `realtime.topic()` com os claims do token e recusam assinatura
+  de qualquer outro tile. O cliente nao pode escolher um `event_id` arbitrario nem assinar
+  topicos publicos.
 - Validar que cada mensagem de posicao pertence ao evento e a celula declarada, esta dentro
   dos limites e tem timestamp recente. O JWT confirma identidade, mas nao prova que o GPS
   do aparelho seja verdadeiro; anti-cheat geografico forte requer validacao adicional.
@@ -108,8 +107,9 @@ borda; nao sao instancias independentes do aplicativo.
 
 ## Carregamento e renderizacao de edificios
 
-`GET /api/world/features` consulta Overpass para o bbox exato configurado no evento, com
-no maximo 5000 m de largura e 5000 m de altura, sem buffer nem celulas vizinhas. Se
+`GET /api/world/features?tile_x=<x>&tile_y=<y>` consulta Overpass para o bbox exato da
+celula autorizada, com 5000 m de largura e altura, sem buffer nem celulas vizinhas. O
+centro do tile e projetado a partir da origem geografica do evento. Se
 Overpass expirar, o fallback na API de dados OSM usa os mesmos quatro limites geograficos.
 Ambas as fontes pedem edificios com nome e POIs nomeados de interesse. A resposta contem o
 footprint convertido para metros locais, nome, categoria e altura OSM quando disponivel.
@@ -133,24 +133,17 @@ uma rejeicao com dezenas de chamadas a API publica.
 
 ## Estado atual
 
-A implementacao ainda nao possui celulas multiplas. Hoje `EVENT_ID` identifica uma unica
-area de ate 5 × 5 km; `/api/world/center` inicializa o centro compartilhado, `/api/world`
-retorna as dimensoes e `/api/realtime/token` autoriza o unico topico `event:<event_id>`.
-Presence, posicoes e chat usam esse mesmo topico e nao existem conversas por tile.
-
-A API ja consulta features OSM e o Phaser as desenha sem basemap; as celulas independentes
-e a continuidade entre elas descritas aqui ainda precisam ser implementadas em conjunto
-com a nova politica RLS.
+`/api/world` devolve a celula inicial `(0, 0)`. `/api/world/tile` autoriza uma nova celula;
+`/api/world/features` recebe os indices para consultar o bbox correspondente, e
+`/api/realtime/token` concede um JWT curto para o topico exclusivo desse tile. O Phaser
+preserva a coordenada geografica ao rebasear o jogador na nova celula. A politica RLS deve
+ser atualizada e aplicada no Supabase para que a troca de topicos funcione em producao.
 
 ## Sequencia de implementacao
 
-1. Criar e testar utilitarios comuns de projecao, `tile_x/tile_y` e vizinhanca, incluindo
-   coordenadas negativas e pontos exatamente sobre uma borda.
-2. Atualizar o endpoint de mundo e os claims JWT para a celula atual e vizinhos de
-   presenca; manter `event_id` como escopo principal.
-3. Separar Realtime em presenca por celula e chat por celula; aplicar RLS correspondente
-   antes de liberar o cliente.
-4. Implementar handoff entre celulas, deduplicacao e expiracao de presenca; testar dois
-   clientes na mesma celula, em celulas adjacentes e em celulas distantes.
-5. Carregar geometrias/POIs conforme a celula e validar atribuicao, cache e limites do
-  Overpass publico.
+1. Manter a projecao e a regra de borda sincronizadas entre backend e Phaser, incluindo
+  coordenadas negativas e pontos exatamente sobre uma borda.
+2. Aplicar e validar a politica RLS atualizada no Supabase antes de publicar a mudanca.
+3. Testar com duas sessoes reais que tiles iguais compartilham posicoes/chat e tiles
+  diferentes nao recebem broadcasts entre si.
+4. Monitorar cache e limites do Overpass publico ao consultar celulas adicionais.

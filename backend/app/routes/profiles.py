@@ -1,11 +1,12 @@
 from flask import Blueprint, g, jsonify, request
 
+from backend.app.avatars import AVATARS
 from backend.app.database import get_database
-from backend.app.security import require_auth
+from backend.app.security import create_access_token, require_auth
 
 
 profiles_blueprint = Blueprint("profiles", __name__)
-PUBLIC_FIELDS = {"display_name", "bio", "interests"}
+PUBLIC_FIELDS = {"display_name", "bio", "interests", "avatar"}
 
 
 def _profile_view(user: dict, profile: dict | None) -> dict:
@@ -60,10 +61,18 @@ def update_my_profile():
             return jsonify({"error": "Informe ate 10 interesses de no maximo 32 caracteres"}), 400
         updates["interests"] = [item.strip() for item in value]
 
+    avatar = body.get("avatar")
+    if "avatar" in body and (not isinstance(avatar, str) or avatar not in AVATARS):
+        return jsonify({"error": "Avatar invalido"}), 400
+
     database = get_database()
     user = database.users.find_one({"_id": g.user["id"]})
     if not user:
         return jsonify({"error": "Conta nao encontrada"}), 404
+    avatar_changed = "avatar" in body and avatar != user.get("avatar")
+    if avatar_changed:
+        database.users.update_one({"_id": g.user["id"]}, {"$set": {"avatar": avatar}})
+        user["avatar"] = avatar
     database.profiles.update_one(
         {"user_id": g.user["id"]},
         {
@@ -76,7 +85,10 @@ def update_my_profile():
         upsert=True,
     )
     profile = database.profiles.find_one({"user_id": g.user["id"]})
-    return jsonify({"profile": _profile_view(user, profile)}), 200
+    response = {"profile": _profile_view(user, profile)}
+    if avatar_changed:
+        response["token"] = create_access_token(user)
+    return jsonify(response), 200
 
 
 @profiles_blueprint.get("/profiles/<username>")

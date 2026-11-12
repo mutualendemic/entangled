@@ -1,15 +1,16 @@
 import math
 
+import jwt
 import pytest
 
 from backend.app import create_app
 from backend.app.config import Config, _jwt_secret
 from backend.app.database import configure_dns_resolver
 from backend.app.osm_features import _bounds, _overpass_query, parse_osm_elements
-from backend.app.routes import auth, world
+from backend.app.routes import auth, profiles, world
 from backend.app.security import create_access_token
 import dns.resolver
-from pymongo.errors import ConfigurationError
+from pymongo.errors import ConfigurationError, DuplicateKeyError
 from types import SimpleNamespace
 
 
@@ -57,6 +58,52 @@ def test_registration_rejects_short_password_without_database():
     )
 
     assert response.status_code == 400
+
+
+def test_profile_can_change_to_cc0_avatar_and_receives_updated_token(monkeypatch):
+    user = {
+        "_id": "user-1",
+        "username": "player_1",
+        "username_key": "player_1",
+        "avatar": "moss",
+    }
+    profile = {}
+
+    class FakeUsers:
+        @staticmethod
+        def find_one(_query):
+            return user
+
+        @staticmethod
+        def update_one(_query, update):
+            user.update(update["$set"])
+
+    class FakeProfiles:
+        @staticmethod
+        def update_one(_query, update, upsert=False):
+            profile.update(update["$set"])
+
+        @staticmethod
+        def find_one(_query):
+            return profile
+
+    monkeypatch.setattr(profiles, "get_database", lambda: SimpleNamespace(users=FakeUsers(), profiles=FakeProfiles()))
+    app = create_app()
+    app.config["JWT_SECRET"] = "test-jwt-secret-with-at-least-32-bytes"
+    with app.app_context():
+        access_token = create_access_token(user)
+
+    response = app.test_client().patch(
+        "/api/profiles/me",
+        json={"avatar": "oga-34"},
+        headers={"Authorization": f"Bearer {access_token}"},
+    )
+
+    assert response.status_code == 200
+    result = response.get_json()
+    assert result["profile"]["avatar"] == "oga-34"
+    refreshed_claims = jwt.decode(result["token"], app.config["JWT_SECRET"], algorithms=["HS256"])
+    assert refreshed_claims["avatar"] == "oga-34"
 
 
 def test_registration_requires_jwt_secret_before_database(monkeypatch):
@@ -165,6 +212,37 @@ def test_world_center_is_initialized_once_for_shared_five_kilometer_area(monkeyp
     assert events.document["height_m"] == 5000
 
 
+def test_admin_cannot_change_event_center_after_tiles_are_created(monkeypatch):
+    class FakeEvents:
+        document = {"_id": "local-event", "center": {"lat": 38.72, "lon": -9.14}}
+
+        def replace_one(self, query, _replacement, upsert=False):
+            allowed_centers = [condition.get("center") for condition in query["$or"]]
+            if self.document["center"] not in allowed_centers:
+                raise DuplicateKeyError("event already exists with another center")
+            raise AssertionError("A changed center should never replace the event")
+
+    events = FakeEvents()
+    monkeypatch.setattr(world, "get_database", lambda: SimpleNamespace(events=events))
+    app = create_app()
+    app.config["EVENT_ADMIN_TOKEN"] = "admin-token"
+
+    response = app.test_client().put(
+        "/api/admin/event",
+        headers={"X-Admin-Token": "admin-token"},
+        json={
+            "name": "Novo nome",
+            "center": {"lat": 38.73, "lon": -9.14},
+            "width_m": 5000,
+            "height_m": 5000,
+        },
+    )
+
+    assert response.status_code == 409
+    assert "nao pode ser alterado" in response.get_json()["error"]
+    assert events.document["center"] == {"lat": 38.72, "lon": -9.14}
+
+
 def test_unconfigured_world_uses_five_kilometer_realtime_bounds():
     assert world._world_dimensions({"center": None, "width_m": 1200, "height_m": 800}) == (5000, 5000)
 
@@ -173,6 +251,84 @@ def test_configured_world_dimensions_are_capped_at_five_kilometers():
     assert world._world_dimensions(
         {"center": {"lat": 38.72, "lon": -9.14}, "width_m": 8000, "height_m": 6000}
     ) == (5000, 5000)
+
+
+def test_world_tile_authorization_returns_geographic_center(monkeypatch):
+    class FakeEvents:
+        @staticmethod
+        def find_one(_query, _projection=None):
+            return {"center": {"lat": 0.0, "lon": 0.0}}
+
+    monkeypatch.setattr(world, "get_database", lambda: SimpleNamespace(events=FakeEvents()))
+    app = create_app()
+    app.config["JWT_SECRET"] = "test-jwt-secret-with-at-least-32-bytes"
+    with app.app_context():
+        token = create_access_token({"_id": "user-1", "username": "player_1", "avatar": "moss"})
+
+    response = app.test_client().post(
+        "/api/world/tile",
+        json={"tile_x": 1, "tile_y": -1},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert response.status_code == 200
+    result = response.get_json()
+    assert result["tile_x"] == 1
+    assert result["tile_y"] == -1
+    assert result["center"]["lat"] == pytest.approx(-5000 / 6_371_000 * 180 / math.pi)
+    assert result["center"]["lon"] == pytest.approx(5000 / 6_371_000 * 180 / math.pi)
+    assert result["width_m"] == result["height_m"] == 5000
+
+
+def test_world_tile_authorization_rejects_out_of_range_index(monkeypatch):
+    def unexpected_database_call():
+        raise AssertionError("Invalid tile should be rejected before database access")
+
+    monkeypatch.setattr(world, "get_database", unexpected_database_call)
+    app = create_app()
+    app.config["JWT_SECRET"] = "test-jwt-secret-with-at-least-32-bytes"
+    with app.app_context():
+        token = create_access_token({"_id": "user-1", "username": "player_1", "avatar": "moss"})
+
+    response = app.test_client().post(
+        "/api/world/tile",
+        json={"tile_x": 1001, "tile_y": 0},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert response.status_code == 400
+
+
+def test_realtime_token_is_scoped_to_requested_tile(monkeypatch):
+    class FakeEvents:
+        @staticmethod
+        def find_one(_query, _projection=None):
+            return {"width_m": 5000, "height_m": 5000}
+
+    monkeypatch.setattr(world, "get_database", lambda: SimpleNamespace(events=FakeEvents()))
+    app = create_app()
+    app.config["JWT_SECRET"] = "test-jwt-secret-with-at-least-32-bytes"
+    app.config["SUPABASE_JWT_SECRET"] = "test-supabase-signing-secret-at-least-32-bytes"
+    with app.app_context():
+        token = create_access_token({"_id": "user-1", "username": "player_1", "avatar": "moss"})
+
+    response = app.test_client().post(
+        "/api/realtime/token",
+        json={"tile_x": -2, "tile_y": 3},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert response.status_code == 200
+    result = response.get_json()
+    claims = jwt.decode(
+        result["token"],
+        app.config["SUPABASE_JWT_SECRET"],
+        algorithms=["HS256"],
+        audience="authenticated",
+    )
+    assert result["channel"] == "event:local-event:tile:-2:3"
+    assert claims["tile_x"] == -2
+    assert claims["tile_y"] == 3
 
 
 def test_osm_features_parse_named_buildings_and_pois_without_roads():
@@ -207,8 +363,65 @@ def test_osm_features_parse_named_buildings_and_pois_without_roads():
     assert '"highway"' not in query
     assert '"stop_position"' not in query
     assert 'way["building"]["name"]' in query
+    assert 'way["natural"="water"]' in query
+    assert 'way["natural"="coastline"]' in query
+    assert ".waters out geom;" in query
     assert ".pois out center;" in query
     assert query.index(".pois out center;") < query.index(".buildings out center geom;")
+
+
+def test_osm_water_polygons_are_returned_as_water_features():
+    features = parse_osm_elements(
+        [
+            {
+                "type": "way",
+                "id": 71,
+                "center": {"lat": 0.0, "lon": 0.0},
+                "geometry": [
+                    {"lat": -0.001, "lon": -0.001},
+                    {"lat": -0.001, "lon": 0.001},
+                    {"lat": 0.001, "lon": 0.001},
+                    {"lat": 0.001, "lon": -0.001},
+                    {"lat": -0.001, "lon": -0.001},
+                ],
+                "tags": {"natural": "water", "water": "sea"},
+            }
+        ],
+        {"lat": 0.0, "lon": 0.0},
+        5000,
+        5000,
+    )
+
+    assert len(features) == 1
+    assert features[0]["kind"] == "water"
+    assert features[0]["category"] == "sea"
+    assert len(features[0]["points"]) >= 4
+
+
+def test_osm_coastline_fills_the_ocean_side_of_a_tile():
+    features = parse_osm_elements(
+        [
+            {
+                "type": "way",
+                "id": 72,
+                "geometry": [
+                    {"lat": 0.0, "lon": -0.05},
+                    {"lat": 0.0, "lon": 0.05},
+                ],
+                "tags": {"natural": "coastline"},
+            }
+        ],
+        {"lat": 0.0, "lon": 0.0},
+        5000,
+        5000,
+    )
+
+    assert len(features) == 1
+    sea = features[0]
+    assert sea["kind"] == "water"
+    assert sea["category"] == "sea"
+    assert min(y for _, y in sea["points"]) == pytest.approx(2500, abs=1)
+    assert max(y for _, y in sea["points"]) == pytest.approx(5000, abs=1)
 
 
 def test_osm_feature_limit_preserves_buildings_and_pois():
@@ -298,6 +511,36 @@ def test_world_features_returns_named_osm_items_for_configured_event(monkeypatch
         "attribution": "OpenStreetMap contributors",
     }
     assert response.headers["Cache-Control"] == "private, max-age=3600"
+
+
+def test_world_features_uses_requested_tile_center(monkeypatch):
+    class FakeEvents:
+        @staticmethod
+        def find_one(_query, _projection=None):
+            return {"center": {"lat": 0.0, "lon": 0.0}}
+
+    requested = {}
+
+    def fake_get_osm_features(_event_id, center, width_m, height_m):
+        requested.update(center=center, width_m=width_m, height_m=height_m)
+        return []
+
+    monkeypatch.setattr(world, "get_database", lambda: SimpleNamespace(events=FakeEvents()))
+    monkeypatch.setattr(world, "get_osm_features", fake_get_osm_features)
+    app = create_app()
+    app.config["JWT_SECRET"] = "test-jwt-secret-with-at-least-32-bytes"
+    with app.app_context():
+        token = create_access_token({"_id": "user-1", "username": "player_1", "avatar": "moss"})
+
+    response = app.test_client().get(
+        "/api/world/features?tile_x=-1&tile_y=1",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert response.status_code == 200
+    assert requested["center"]["lat"] == pytest.approx(5000 / 6_371_000 * 180 / math.pi)
+    assert requested["center"]["lon"] == pytest.approx(-5000 / 6_371_000 * 180 / math.pi)
+    assert requested["width_m"] == requested["height_m"] == 5000
 
 
 def test_private_profile_requires_authentication():
