@@ -22,8 +22,18 @@ interface PositionPayload extends RemotePlayer {
   sentAt: number;
 }
 
-const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL;
-const SUPABASE_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY;
+const SUPABASE_URL = (
+  import.meta.env.VITE_SUPABASE_URL
+  ?? import.meta.env.SUPABASE_URL
+  ?? import.meta.env.NEXT_PUBLIC_SUPABASE_URL
+  ?? ""
+) as string;
+const SUPABASE_KEY = (
+  import.meta.env.VITE_SUPABASE_ANON_KEY
+  ?? import.meta.env.SUPABASE_ANON_KEY
+  ?? import.meta.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
+  ?? ""
+) as string;
 
 export class RealtimeSession {
   private client: SupabaseClient | null = null;
