@@ -2,6 +2,11 @@ import hashlib
 import hmac
 import os
 import secrets
+from pathlib import Path
+
+from dotenv import load_dotenv
+
+load_dotenv(Path(__file__).resolve().parents[2] / ".env")
 
 
 def _jwt_secret() -> str:
