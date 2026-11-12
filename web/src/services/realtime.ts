@@ -193,9 +193,18 @@ export class RealtimeSession {
       }
       online.add(meta.id);
       const previous = this.positions.get(meta.id);
-      if (previous) {
-        this.onPlayers([{ ...previous, username: meta.username, avatar: meta.avatar }]);
-      }
+      const remote: PositionPayload = previous
+        ? { ...previous, username: meta.username, avatar: meta.avatar }
+        : {
+            id: meta.id,
+            username: meta.username,
+            avatar: meta.avatar,
+            x: 0,
+            y: 0,
+            sentAt: Date.now(),
+          };
+      this.positions.set(meta.id, remote);
+      this.onPlayers([remote]);
     }
     for (const id of this.positions.keys()) {
       if (id !== this.user.id && !online.has(id)) {
@@ -206,7 +215,10 @@ export class RealtimeSession {
   }
 
   private receivePosition(payload: PositionPayload): void {
-    if (!payload || payload.id === this.user.id || Date.now() - payload.sentAt > 15_000) {
+    if (!payload || payload.id === this.user.id || typeof payload.x !== "number" || typeof payload.y !== "number") {
+      return;
+    }
+    if (Date.now() - payload.sentAt > 15_000) {
       return;
     }
     this.positions.set(payload.id, payload);
@@ -216,6 +228,7 @@ export class RealtimeSession {
   private receiveMessage(payload: ChatMessage): void {
     if (
       !payload
+      || !payload.id
       || payload.senderId === this.user.id
       || typeof payload.text !== "string"
       || payload.text.length > 500
