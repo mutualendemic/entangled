@@ -157,7 +157,8 @@ export class RealtimeSession {
       });
     try {
       await new Promise<void>((resolve, reject) => {
-        channel.subscribe((status) => {
+        channel.subscribe((status, err) => {
+          console.error("Realtime subscribe status:", status, err);
           this.onStatus(status === "SUBSCRIBED" ? `Conectado ao tile ${tileX}, ${tileY}` : status);
           if (status === "SUBSCRIBED") {
             const presence: PresenceMeta = {
@@ -168,7 +169,7 @@ export class RealtimeSession {
             void channel.track(presence);
             resolve();
           } else if (["CHANNEL_ERROR", "TIMED_OUT", "CLOSED"].includes(status)) {
-            reject(new Error("Nao foi possivel conectar ao tile autorizado."));
+            reject(new Error(err ? err.message ?? "Nao foi possivel conectar ao tile autorizado." : "Nao foi possivel conectar ao tile autorizado."));
           }
         });
       });
