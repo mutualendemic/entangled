@@ -260,7 +260,7 @@ async function renderGame(root: HTMLElement, user: User): Promise<void> {
               <span class="control-mode-label">Controle do jogador</span>
               <div class="control-modes" role="radiogroup" aria-label="Controle do jogador">
                 <label class="control-mode"><input type="radio" name="player-control" value="joystick" checked /><span>Joystick</span></label>
-                <label class="control-mode"><input type="radio" name="player-control" value="gps" /><span>GPS</span></label>
+                <label class="control-mode" title="${event.center ? "Ativar localizacao GPS continua" : "Defina primeiro o centro pelo botao do mapa"}"><input type="radio" name="player-control" value="gps" ${event.center ? "" : "disabled"} /><span>GPS</span></label>
                 <label class="control-mode" title="${event.beacons.length >= 3 ? "Posicao por beacons BLE" : "O evento precisa configurar pelo menos 3 beacons"}"><input type="radio" name="player-control" value="ble" ${event.beacons.length >= 3 ? "" : "disabled"} /><span>Bluetooth</span></label>
               </div>
             </div>
@@ -607,38 +607,41 @@ async function renderGame(root: HTMLElement, user: User): Promise<void> {
   }
 
   game.events.once(Phaser.Core.Events.READY, () => {
-    scene = game.scene.getScene("world") as WorldScene;
-    scene.setWorld(event);
-    scene.setFeatures(cityFeatures);
-    scene.setLocalIdentity(user.username, user.avatar);
-    scene.events.on("position", (position: { x: number; y: number }) => {
-      void realtime.sendPosition({
-        id: user.id,
-        username: user.username,
-        avatar: user.avatar,
-        source: localSource,
-        accuracy: localSource === "local" ? undefined : localAccuracy,
-        ...position,
-      }, localGeo ?? undefined);
-    });
-    scene.events.on("tile-request", (transition: TileTransition) => {
-      void transitionToTile(transition);
-    });
-    scene.events.on("satellite-error", (message: string) => {
-      satelliteMapButton.setAttribute("aria-pressed", "false");
-      satelliteMapButton.setAttribute("aria-label", "Ativar imagem de satelite");
-      satelliteMapButton.title = "Ativar imagem de satelite";
-      mapCredit.textContent = "Dados © OpenStreetMap contributors";
-      void scene?.setSatelliteEnabled(false);
-      status.textContent = message;
-    });
-    scene.events.on("feature-selected", (feature: WorldFeature) => {
-      showFeatureDetails(feature);
-    });
-      scene.events.on("camera-mode", (followingPlayer: boolean) => {
+    const worldScene = game.scene.getScene("world") as WorldScene;
+    worldScene.events.once(Phaser.Scenes.Events.CREATE, () => {
+      scene = worldScene;
+      worldScene.setWorld(event);
+      worldScene.setFeatures(cityFeatures);
+      worldScene.setLocalIdentity(user.username, user.avatar);
+      worldScene.events.on("position", (position: { x: number; y: number }) => {
+        void realtime.sendPosition({
+          id: user.id,
+          username: user.username,
+          avatar: user.avatar,
+          source: localSource,
+          accuracy: localSource === "local" ? undefined : localAccuracy,
+          ...position,
+        }, localGeo ?? undefined);
+      });
+      worldScene.events.on("tile-request", (transition: TileTransition) => {
+        void transitionToTile(transition);
+      });
+      worldScene.events.on("satellite-error", (message: string) => {
+        satelliteToggleButton.setAttribute("aria-pressed", "false");
+        satelliteToggleButton.setAttribute("aria-label", "Ativar imagem de satelite");
+        satelliteToggleButton.title = "Ativar imagem de satelite";
+        mapCredit.textContent = "Dados © OpenStreetMap contributors";
+        void scene?.setSatelliteEnabled(false);
+        status.textContent = message;
+      });
+      worldScene.events.on("feature-selected", (feature: WorldFeature) => {
+        showFeatureDetails(feature);
+      });
+      worldScene.events.on("camera-mode", (followingPlayer: boolean) => {
         recenterMapButton.hidden = followingPlayer;
       });
-      recenterMapButton.hidden = scene.isCameraFollowingPlayer();
+      recenterMapButton.hidden = worldScene.isCameraFollowingPlayer();
+    });
   });
 
   const centerPrompt = root.querySelector<HTMLElement>("#map-center-prompt")!;
@@ -681,8 +684,6 @@ async function renderGame(root: HTMLElement, user: User): Promise<void> {
 
   const movementStick = root.querySelector<HTMLElement>("#movement-stick")!;
   const movementKnob = root.querySelector<HTMLElement>(".movement-stick-knob")!;
-  const followPlayerButton = root.querySelector<HTMLButtonElement>("#toggle-follow-player")!;
-  const compassRotationButton = root.querySelector<HTMLButtonElement>("#toggle-compass-rotation")!;
   const zoomInButton = root.querySelector<HTMLButtonElement>("#zoom-in")!;
   const zoomOutButton = root.querySelector<HTMLButtonElement>("#zoom-out")!;
   const zoom5kmButton = root.querySelector<HTMLButtonElement>("#zoom-5km")!;
@@ -741,33 +742,6 @@ async function renderGame(root: HTMLElement, user: User): Promise<void> {
   });
   document.addEventListener("fullscreenchange", syncFullscreenButton);
   recenterMapButton.addEventListener("click", () => scene?.centerCameraOnPlayer());
-  followPlayerButton.addEventListener("click", () => {
-    const enabled = followPlayerButton.getAttribute("aria-pressed") !== "true";
-    followPlayerButton.setAttribute("aria-pressed", String(enabled));
-    scene?.setFollowPlayer(enabled);
-    if (enabled) {
-      scene?.centerCameraOnPlayer();
-    }
-  });
-  compassRotationButton.addEventListener("click", () => {
-    const enabled = compassRotationButton.getAttribute("aria-pressed") !== "true";
-    compassRotationButton.setAttribute("aria-pressed", String(enabled));
-    scene?.setCompassRotation(enabled);
-    if (!enabled) {
-      scene?.setPlayerHeading(0);
-    }
-  });
-  if ("DeviceOrientationEvent" in window) {
-    const handleDeviceOrientation = (event: DeviceOrientationEvent): void => {
-      if (!compassRotationButton.getAttribute("aria-pressed") || compassRotationButton.getAttribute("aria-pressed") !== "true") {
-        return;
-      }
-      const heading = (event as DeviceOrientationEvent & { webkitCompassHeading?: number; alpha?: number }).webkitCompassHeading;
-      const alphaValue = typeof heading === "number" ? heading : (event as DeviceOrientationEvent & { alpha?: number }).alpha ?? 0;
-      scene?.setPlayerHeading(Number(alphaValue) || 0);
-    };
-    window.addEventListener("deviceorientation", handleDeviceOrientation);
-  }
   mapDestinationsButton.addEventListener("click", () => {
     mapDestinationsPanel.hidden = !mapDestinationsPanel.hidden;
     mapDestinationsButton.setAttribute("aria-expanded", String(!mapDestinationsPanel.hidden));
@@ -1002,6 +976,10 @@ async function renderGame(root: HTMLElement, user: User): Promise<void> {
     }
 
     if (mode === "gps") {
+      if (!event.center) {
+        selectControlMode("joystick", "Defina primeiro o centro pelo botao GPS no mapa.");
+        return;
+      }
       if (!navigator.geolocation || !window.isSecureContext) {
         selectControlMode("joystick", "GPS requer permissao e HTTPS ou localhost.");
         return;

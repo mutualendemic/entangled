@@ -476,7 +476,7 @@ export class WorldScene extends Phaser.Scene {
       stroke: "#101a18",
       strokeThickness: 3,
     }).setOrigin(0.5, 0);
-    return this.add.container(0, 0, [visual, name]).setData("avatar", avatar);
+    return this.add.container(0, 0, [visual, name]).setData("avatar", avatar).setDepth(30);
   }
 
   private makeAvatarVisual(color: number, avatar: string): Phaser.GameObjects.GameObject {
