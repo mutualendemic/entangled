@@ -22,18 +22,8 @@ interface PositionPayload extends RemotePlayer {
   sentAt: number;
 }
 
-const SUPABASE_URL = (
-  import.meta.env.VITE_SUPABASE_URL
-  ?? import.meta.env.SUPABASE_URL
-  ?? import.meta.env.NEXT_PUBLIC_SUPABASE_URL
-  ?? ""
-) as string;
-const SUPABASE_KEY = (
-  import.meta.env.VITE_SUPABASE_ANON_KEY
-  ?? import.meta.env.SUPABASE_ANON_KEY
-  ?? import.meta.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
-  ?? ""
-) as string;
+const SUPABASE_URL = import.meta.env.SUPABASE_URL ?? "";
+const SUPABASE_KEY = import.meta.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ?? "";
 
 export class RealtimeSession {
   private client: SupabaseClient | null = null;
@@ -115,6 +105,31 @@ export class RealtimeSession {
     await this.joinTile(tileX, tileY);
   }
 
+  private logRealtimeDebug(context: Record<string, unknown>): void {
+    try {
+      const key = "entanglement.realtime.debug";
+      const previous = JSON.parse(sessionStorage.getItem(key) ?? "[]") as Array<Record<string, unknown>>;
+      const entry = { ts: new Date().toISOString(), ...context };
+      const next = [...previous.slice(-19), entry];
+      sessionStorage.setItem(key, JSON.stringify(next));
+      const download = new Blob([JSON.stringify(next, null, 2)], { type: "application/json" });
+      const url = URL.createObjectURL(download);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = "entanglement-realtime-debug.json";
+      link.style.display = "none";
+      document.body.appendChild(link);
+      setTimeout(() => {
+        link.click();
+        link.remove();
+        URL.revokeObjectURL(url);
+      }, 0);
+    } catch {
+      // ignore storage issues; keep logs only in console
+    }
+    console.warn("Realtime debug:", context);
+  }
+
   private async refreshAccessToken(): Promise<void> {
     try {
       if (!this.client) {
@@ -159,6 +174,16 @@ export class RealtimeSession {
       await new Promise<void>((resolve, reject) => {
         channel.subscribe((status, err) => {
           console.error("Realtime subscribe status:", status, err);
+          this.logRealtimeDebug({
+            topic,
+            tileX,
+            tileY,
+            supabaseUrl: SUPABASE_URL,
+            hasAnonKey: Boolean(SUPABASE_KEY),
+            clientState: this.client?.realtime ? "ready" : "missing",
+            status,
+            err,
+          });
           this.onStatus(status === "SUBSCRIBED" ? `Conectado ao tile ${tileX}, ${tileY}` : status);
           if (status === "SUBSCRIBED") {
             const presence: PresenceMeta = {

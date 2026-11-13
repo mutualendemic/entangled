@@ -8,22 +8,15 @@ export default defineConfig(({ mode }) => {
   const commitHash = process.env.VERCEL_GIT_COMMIT_SHA
     ?? process.env.GITHUB_SHA
     ?? execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim();
-  const supabaseUrl = env.VITE_SUPABASE_URL
-    || env.NEXT_PUBLIC_SUPABASE_URL
-    || env.SUPABASE_URL
-    || "";
-  const supabasePublicKey = env.VITE_SUPABASE_ANON_KEY
-    || env.NEXT_PUBLIC_SUPABASE_ANON_KEY
-    || env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY
-    || env.SUPABASE_ANON_KEY
-    || "";
+  const supabaseUrl = env.SUPABASE_URL ?? "";
+  const supabasePublicKey = env.NEXT_PUBLIC_SUPABASE_ANON_KEY ?? "";
 
   return {
     envDir: "..",
     define: {
       __APP_VERSION__: JSON.stringify(commitHash.slice(0, 7)),
-      "import.meta.env.VITE_SUPABASE_URL": JSON.stringify(supabaseUrl),
-      "import.meta.env.VITE_SUPABASE_ANON_KEY": JSON.stringify(supabasePublicKey),
+      "import.meta.env.SUPABASE_URL": JSON.stringify(supabaseUrl),
+      "import.meta.env.NEXT_PUBLIC_SUPABASE_ANON_KEY": JSON.stringify(supabasePublicKey),
     },
     server: {
       port: 5173,
