@@ -191,7 +191,19 @@ export class RealtimeSession {
               username: this.user.username,
               avatar: this.user.avatar,
             };
-            void channel.track(presence);
+            void channel.track(presence).then((result) => {
+              this.logRealtimeDebug({ topic, event: "presence_track", result });
+              if (result !== "ok") {
+                this.onStatus(`Falha ao publicar presença: ${result}`);
+              }
+            }).catch((error: unknown) => {
+              this.logRealtimeDebug({
+                topic,
+                event: "presence_track",
+                error: error instanceof Error ? error.message : String(error),
+              });
+              this.onStatus("Falha ao publicar presença no tile.");
+            });
             resolve();
           } else if (["CHANNEL_ERROR", "TIMED_OUT", "CLOSED"].includes(status)) {
             reject(new Error(err ? err.message ?? "Nao foi possivel conectar ao tile autorizado." : "Nao foi possivel conectar ao tile autorizado."));
