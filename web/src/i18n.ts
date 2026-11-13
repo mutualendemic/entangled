@@ -127,6 +127,7 @@ const englishTranslations: Record<string, string> = {
   "Chat indisponivel: conecte o Supabase Realtime.": "Chat unavailable: connect to Supabase Realtime.",
   "Nao foi possivel enviar a mensagem ({result}).": "Could not send the message ({result}).",
   "A reconectar ao Realtime...": "Reconnecting to Realtime...",
+  "Token Realtime atualizado; a reconectar ao canal...": "Realtime token refreshed; reconnecting to the channel...",
   "A conexao em tempo real expirou. Entre novamente no jogo.": "The Realtime connection expired. Please sign in to the game again.",
   "Nao foi possivel conectar ao tile autorizado.": "Could not connect to the authorized tile.",
   "Falha ao carregar imagem de satelite.": "Failed to load satellite imagery.",

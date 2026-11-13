@@ -53,7 +53,7 @@ export class RealtimeSession {
   private client: SupabaseClient | null = null;
   private channel: RealtimeChannel | null = null;
   private refreshTimer = 0;
-  private refreshInFlight: Promise<void> | null = null;
+  private refreshInFlight: Promise<boolean> | null = null;
   private resumeReconnectInFlight: Promise<void> | null = null;
   private lastResumeReconnectAt = 0;
   private readonly refreshOnVisibility = (): void => {
@@ -184,21 +184,26 @@ export class RealtimeSession {
     }
 
     this.lastResumeReconnectAt = Date.now();
+    const channel = this.channel;
+    const tileX = this.tileX;
+    const tileY = this.tileY;
     const reconnect = (async () => {
-      await this.refreshAccessToken();
-      if (this.client !== client || !this.channel) {
+      const refreshed = await this.refreshAccessToken();
+      if (!refreshed || this.client !== client || this.channel !== channel) {
         return;
       }
 
       this.logRealtimeDebug({
         event: "realtime_resume_reconnect",
+        result: "rejoining_channel_after_auth_refresh",
         connectionState: client.realtime.connectionState(),
-        tileX: this.tileX,
-        tileY: this.tileY,
+        tileX,
+        tileY,
       });
-      await client.realtime.disconnect();
-      if (this.client === client && this.channel) {
-        client.realtime.connect();
+      this.onStatus(t("Token Realtime atualizado; a reconectar ao canal..."));
+      await this.leaveTile();
+      if (this.client === client) {
+        await this.joinTile(tileX, tileY);
       }
     })();
     this.resumeReconnectInFlight = reconnect;
@@ -218,13 +223,13 @@ export class RealtimeSession {
     }
   }
 
-  private async refreshAccessToken(): Promise<void> {
+  private async refreshAccessToken(): Promise<boolean> {
     if (this.refreshInFlight) {
       return this.refreshInFlight;
     }
     const client = this.client;
     if (!client) {
-      return;
+      return false;
     }
 
     const refresh = (async () => {
@@ -234,7 +239,7 @@ export class RealtimeSession {
           body: { tile_x: this.tileX, tile_y: this.tileY },
         });
         if (this.client !== client) {
-          return;
+          return false;
         }
         await client.realtime.setAuth(token);
         this.logRealtimeDebug({
@@ -244,6 +249,7 @@ export class RealtimeSession {
           tileY: this.tileY,
           expiresIn,
         });
+        return true;
       } catch (error) {
         this.logRealtimeDebug({
           event: "realtime_auth_refresh",
@@ -251,11 +257,12 @@ export class RealtimeSession {
           error: error instanceof Error ? error.message : String(error),
         });
         this.onStatus(t("A conexao em tempo real expirou. Entre novamente no jogo."));
+        return false;
       }
     })();
     this.refreshInFlight = refresh;
     try {
-      await refresh;
+      return await refresh;
     } finally {
       if (this.refreshInFlight === refresh) this.refreshInFlight = null;
     }
@@ -286,6 +293,7 @@ export class RealtimeSession {
       .on("broadcast", { event: "chat" }, ({ payload }) => {
         if (this.channel === channel) this.receiveMessage(payload);
       });
+    let wasSubscribed = false;
     try {
       await new Promise<void>((resolve, reject) => {
         channel.subscribe((status, err) => {
@@ -311,6 +319,7 @@ export class RealtimeSession {
                 : status === "CLOSED" ? t("Conexao Realtime encerrada.") : status;
           this.onStatus(statusMessage);
           if (status === "SUBSCRIBED") {
+            wasSubscribed = true;
             const presence: PresenceMeta = {
               id: this.user.id,
               username: this.user.username,
@@ -331,7 +340,11 @@ export class RealtimeSession {
             });
             resolve();
           } else if (["CHANNEL_ERROR", "TIMED_OUT", "CLOSED"].includes(status)) {
-            reject(new Error(err ? err.message ?? t("Nao foi possivel conectar ao tile autorizado.") : t("Nao foi possivel conectar ao tile autorizado.")));
+            if (wasSubscribed) {
+              if (this.channel === channel) void this.reconnectAfterResume();
+            } else {
+              reject(new Error(err ? err.message ?? t("Nao foi possivel conectar ao tile autorizado.") : t("Nao foi possivel conectar ao tile autorizado.")));
+            }
           }
         });
       });
