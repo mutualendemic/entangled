@@ -24,11 +24,39 @@ interface PositionPayload extends RemotePlayer {
 
 const SUPABASE_URL = import.meta.env.SUPABASE_URL ?? "";
 const SUPABASE_KEY = import.meta.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ?? "";
+const REALTIME_DEBUG_STORAGE_KEY = "entanglement.realtime.debug";
+
+export function downloadRealtimeDebugLog(): boolean {
+  try {
+    const entries = JSON.parse(sessionStorage.getItem(REALTIME_DEBUG_STORAGE_KEY) ?? "[]");
+    if (!Array.isArray(entries) || entries.length === 0) {
+      return false;
+    }
+    const download = new Blob([JSON.stringify(entries, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(download);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = "entanglement-realtime-debug.json";
+    link.style.display = "none";
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    window.setTimeout(() => URL.revokeObjectURL(url), 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 export class RealtimeSession {
   private client: SupabaseClient | null = null;
   private channel: RealtimeChannel | null = null;
   private refreshTimer = 0;
+  private refreshInFlight: Promise<void> | null = null;
+  private readonly refreshOnVisibility = (): void => {
+    if (document.visibilityState === "visible") void this.refreshAccessToken();
+  };
+  private readonly refreshOnOnline = (): void => { void this.refreshAccessToken(); };
   private positions = new Map<string, PositionPayload>();
   private tileX = 0;
   private tileY = 0;
@@ -54,7 +82,9 @@ export class RealtimeSession {
     await this.joinTile(tileX, tileY);
     this.refreshTimer = window.setInterval(() => {
       void this.refreshAccessToken();
-    }, 8 * 60 * 1000);
+    }, 4 * 60 * 1000);
+    document.addEventListener("visibilitychange", this.refreshOnVisibility);
+    window.addEventListener("online", this.refreshOnOnline);
   }
 
   async sendPosition(position: Omit<PositionPayload, "sentAt">, geo?: GeoPosition): Promise<void> {
@@ -93,6 +123,8 @@ export class RealtimeSession {
 
   async stop(): Promise<void> {
     window.clearInterval(this.refreshTimer);
+    document.removeEventListener("visibilitychange", this.refreshOnVisibility);
+    window.removeEventListener("online", this.refreshOnOnline);
     await this.leaveTile();
     this.client = null;
   }
@@ -113,23 +145,10 @@ export class RealtimeSession {
 
   private logRealtimeDebug(context: Record<string, unknown>): void {
     try {
-      const key = "entanglement.realtime.debug";
-      const previous = JSON.parse(sessionStorage.getItem(key) ?? "[]") as Array<Record<string, unknown>>;
+      const previous = JSON.parse(sessionStorage.getItem(REALTIME_DEBUG_STORAGE_KEY) ?? "[]") as Array<Record<string, unknown>>;
       const entry = { ts: new Date().toISOString(), ...context };
       const next = [...previous.slice(-19), entry];
-      sessionStorage.setItem(key, JSON.stringify(next));
-      const download = new Blob([JSON.stringify(next, null, 2)], { type: "application/json" });
-      const url = URL.createObjectURL(download);
-      const link = document.createElement("a");
-      link.href = url;
-      link.download = "entanglement-realtime-debug.json";
-      link.style.display = "none";
-      document.body.appendChild(link);
-      setTimeout(() => {
-        link.click();
-        link.remove();
-        URL.revokeObjectURL(url);
-      }, 0);
+      sessionStorage.setItem(REALTIME_DEBUG_STORAGE_KEY, JSON.stringify(next));
     } catch {
       // ignore storage issues; keep logs only in console
     }
@@ -153,17 +172,45 @@ export class RealtimeSession {
   }
 
   private async refreshAccessToken(): Promise<void> {
-    try {
-      if (!this.client) {
-        return;
+    if (this.refreshInFlight) {
+      return this.refreshInFlight;
+    }
+    const client = this.client;
+    if (!client) {
+      return;
+    }
+
+    const refresh = (async () => {
+      try {
+        const { token, expires_in: expiresIn } = await apiRequest<{ token: string; expires_in?: number }>("/realtime/token", {
+          method: "POST",
+          body: { tile_x: this.tileX, tile_y: this.tileY },
+        });
+        if (this.client !== client) {
+          return;
+        }
+        await client.realtime.setAuth(token);
+        this.logRealtimeDebug({
+          event: "realtime_auth_refresh",
+          result: "ok",
+          tileX: this.tileX,
+          tileY: this.tileY,
+          expiresIn,
+        });
+      } catch (error) {
+        this.logRealtimeDebug({
+          event: "realtime_auth_refresh",
+          result: "error",
+          error: error instanceof Error ? error.message : String(error),
+        });
+        this.onStatus("A conexao em tempo real expirou. Entre novamente no jogo.");
       }
-      const { token } = await apiRequest<{ token: string }>("/realtime/token", {
-        method: "POST",
-        body: { tile_x: this.tileX, tile_y: this.tileY },
-      });
-      await this.client.realtime.setAuth(token);
-    } catch {
-      this.onStatus("A conexao em tempo real expirou. Entre novamente no jogo.");
+    })();
+    this.refreshInFlight = refresh;
+    try {
+      await refresh;
+    } finally {
+      if (this.refreshInFlight === refresh) this.refreshInFlight = null;
     }
   }
 
@@ -204,7 +251,11 @@ export class RealtimeSession {
             hasAnonKey: Boolean(SUPABASE_KEY),
             clientState: this.client?.realtime ? "ready" : "missing",
             status,
-            err,
+            err: err ? {
+              name: err.name,
+              message: err.message,
+              code: "code" in err ? err.code : undefined,
+            } : null,
           });
           this.onStatus(status === "SUBSCRIBED" ? `Conectado ao tile ${tileX}, ${tileY}` : status);
           if (status === "SUBSCRIBED") {
@@ -282,6 +333,11 @@ export class RealtimeSession {
         this.onPlayerLeft(id);
       }
     }
+    this.logRealtimeDebug({
+      event: "presence_sync",
+      presenceCount: new Set(Object.values(state).flat().map((meta) => meta.id).filter(Boolean)).size,
+      remotePlayerIds: [...online],
+    });
   }
 
   private receivePosition(payload: PositionPayload): void {

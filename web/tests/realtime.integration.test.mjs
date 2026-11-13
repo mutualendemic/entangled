@@ -49,7 +49,7 @@ async function createPlayerSession(username, password) {
     { tile_x: tileX, tile_y: tileY },
     login.token,
   );
-  return { user: login.user, token: realtime.token, topic: realtime.channel };
+  return { user: login.user, apiToken: login.token, token: realtime.token, topic: realtime.channel };
 }
 
 function waitForSubscription(channel) {
@@ -154,6 +154,13 @@ test("two players share presence and exchange position/chat over Realtime", {
       withTimeout(presenceA, `Presence did not contain both players within ${timeoutMs} ms`),
       withTimeout(presenceB, `Presence did not contain both players within ${timeoutMs} ms`),
     ]);
+
+    const renewedTokens = await Promise.all(sessions.map(({ player }) => postJson(
+      "/realtime/token",
+      { tile_x: tileX, tile_y: tileY },
+      player.apiToken,
+    )));
+    await Promise.all(sessions.map(({ client }, index) => client.realtime.setAuth(renewedTokens[index].token)));
 
     const runId = randomUUID();
     const positionFromA = {

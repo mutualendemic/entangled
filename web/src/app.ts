@@ -3,7 +3,7 @@ import { AVATAR_OPTIONS, getAvatarOption } from "./avatarCatalog";
 import { apiRequest, getToken, setToken, type Profile, type User } from "./services/api";
 import { startBeaconScan } from "./services/bluetooth";
 import { distanceBetween, stopWatchingLocation, watchLocation, type GeoPosition } from "./services/location";
-import { RealtimeSession, type ChatMessage } from "./services/realtime";
+import { downloadRealtimeDebugLog, RealtimeSession, type ChatMessage } from "./services/realtime";
 import { WorldScene, type RemotePlayer, type WorldData, type WorldFeature } from "./world/WorldScene";
 
 type AuthMode = "login" | "register" | "recovery";
@@ -309,7 +309,7 @@ async function renderGame(root: HTMLElement, user: User): Promise<void> {
               <form id="email-form" class="email-form"><label>Email, nao publico<input name="email" type="email" maxlength="254" autocomplete="email" value="${escapeHtml(emailState.email ?? "")}" required /></label><button class="secondary-button" type="submit">${emailState.verified ? "Atualizar email" : "Associar email"}</button><p class="notice" id="email-notice" role="status"></p></form>
             </div>
           </section>
-          <footer class="panel-footer">${avatarMarkup(user.avatar)}<span>Conectado como <strong>${escapeHtml(user.username)}</strong></span><span class="app-version">#${__APP_VERSION__}</span></footer>
+          <footer class="panel-footer">${avatarMarkup(user.avatar)}<span>Conectado como <strong>${escapeHtml(user.username)}</strong></span><button id="download-realtime-debug" class="debug-download-button" type="button" title="Descarregar logs de diagnóstico" aria-label="Descarregar logs de diagnóstico">Baixar logs</button><span class="app-version">#${__APP_VERSION__}</span></footer>
         </aside>
       </div>
     </main>`;
@@ -339,6 +339,11 @@ async function renderGame(root: HTMLElement, user: User): Promise<void> {
   const messages = root.querySelector<HTMLElement>("#message-list")!;
   const positionList = root.querySelector<HTMLElement>("#player-list")!;
   const status = root.querySelector<HTMLElement>("#connection-status")!;
+  root.querySelector<HTMLButtonElement>("#download-realtime-debug")?.addEventListener("click", () => {
+    if (!downloadRealtimeDebugLog()) {
+      status.textContent = "Ainda nao ha logs de Realtime para descarregar.";
+    }
+  });
   const locationStatus = root.querySelector<HTMLElement>("#location-status")!;
   const cityStatus = root.querySelector<HTMLElement>("#city-status")!;
   const cityRetry = root.querySelector<HTMLButtonElement>("#city-retry")!;
