@@ -21,11 +21,7 @@ with check (
     || ':tile:' || (select auth.jwt() ->> 'tile_x')
     || ':' || (select auth.jwt() ->> 'tile_y')
   and (
-    realtime.messages.extension = 'presence'
-    or (
-      realtime.messages.extension = 'broadcast'
-      and realtime.messages.event in ('chat', 'position')
-    )
+    realtime.messages.extension in ('presence', 'broadcast')
     or (
       payload ? 'id'
       and payload ->> 'id' = (select auth.jwt() ->> 'sub')

@@ -16,6 +16,7 @@ web/tsconfig.tsbuildinfo
 .env
 .env.*
 !.env.example
+!.env.realtime-test.example
 .vscode/
 .idea/
 *.log
