@@ -53,10 +53,12 @@ export class RealtimeSession {
   private channel: RealtimeChannel | null = null;
   private refreshTimer = 0;
   private refreshInFlight: Promise<void> | null = null;
+  private resumeReconnectInFlight: Promise<void> | null = null;
+  private lastResumeReconnectAt = 0;
   private readonly refreshOnVisibility = (): void => {
-    if (document.visibilityState === "visible") void this.refreshAccessToken();
+    if (document.visibilityState === "visible") void this.reconnectAfterResume();
   };
-  private readonly refreshOnOnline = (): void => { void this.refreshAccessToken(); };
+  private readonly refreshOnOnline = (): void => { void this.reconnectAfterResume(); };
   private positions = new Map<string, PositionPayload>();
   private tileX = 0;
   private tileY = 0;
@@ -168,6 +170,50 @@ export class RealtimeSession {
       this.broadcastFailed = false;
       this.logRealtimeDebug({ event: "broadcast_recovered", name: event });
       this.onStatus(`Conectado ao tile ${this.tileX}, ${this.tileY}`);
+    }
+  }
+
+  private async reconnectAfterResume(): Promise<void> {
+    if (this.resumeReconnectInFlight || Date.now() - this.lastResumeReconnectAt < 2_000) {
+      return this.resumeReconnectInFlight ?? Promise.resolve();
+    }
+    const client = this.client;
+    if (!client || !this.channel) {
+      return;
+    }
+
+    this.lastResumeReconnectAt = Date.now();
+    const reconnect = (async () => {
+      await this.refreshAccessToken();
+      if (this.client !== client || !this.channel) {
+        return;
+      }
+
+      this.logRealtimeDebug({
+        event: "realtime_resume_reconnect",
+        connectionState: client.realtime.connectionState(),
+        tileX: this.tileX,
+        tileY: this.tileY,
+      });
+      await client.realtime.disconnect();
+      if (this.client === client && this.channel) {
+        client.realtime.connect();
+      }
+    })();
+    this.resumeReconnectInFlight = reconnect;
+    try {
+      await reconnect;
+    } catch (error) {
+      this.logRealtimeDebug({
+        event: "realtime_resume_reconnect",
+        result: "error",
+        error: error instanceof Error ? error.message : String(error),
+      });
+      this.onStatus("A reconectar ao Realtime...");
+    } finally {
+      if (this.resumeReconnectInFlight === reconnect) {
+        this.resumeReconnectInFlight = null;
+      }
     }
   }
 

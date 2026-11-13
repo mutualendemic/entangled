@@ -87,6 +87,22 @@ Assim, jogadores em tiles diferentes do mesmo evento nao veem as posicoes nem re
 conversas uns dos outros. A comunicacao so volta quando ambos estao autorizados e conectados
 ao mesmo tile; nao ha canais de borda ou visibilidade cruzada.
 
+### Retomada de conexao em browsers moveis
+
+Android e outros sistemas moveis podem suspender uma pagina em segundo plano e interromper
+seu WebSocket. Ao voltar a ficar visivel ou recuperar a rede, o cliente renova o token de
+Realtime e forca a reconexao do socket. O canal do tile atual volta a subscrever-se e a
+presenca e publicada novamente, sem autorizar ou entrar em outro tile. A retomada pode ter
+uma breve interrupcao enquanto a assinatura e restabelecida.
+
+As posicoes sao broadcasts efemeros, sem fila nem historico para clientes desconectados.
+Quando o jogo retoma a execucao, seu ciclo volta a transmitir a posicao atual (aproximadamente
+a cada 250 ms); outros clientes so a veem depois de receberem um broadcast novo. A presenca
+e a posicao nao ficam guardadas para representar um jogador offline. Uma nova instancia do
+jogo ou outro browser, como Chrome e Brave, nao herda a posicao em memoria do browser anterior.
+Persistir a ultima posicao para uso offline exigiria uma decisao de produto e um armazenamento
+com expiracao e controles de privacidade especificos.
+
 ## Autorizacao e privacidade
 
 - `POST /api/world/tile` valida o indice da celula dentro do evento autenticado. O cliente

@@ -37,8 +37,11 @@ do Supabase e um token de curta duracao emitido pelo servidor para os canais pri
    “3/4 Directional Sprite Sets”, filtrados por licenca CC0. As imagens locais alimentam o
    seletor de cadastro/perfil e a representacao do jogador; autores e fontes estao em
    [avatar-assets.md](avatar-assets.md).
-- Presenca, posicoes ao vivo e mensagens nao sao persistidas inicialmente. Supabase
-   Broadcast/Presence evita gravar historicos de chat e reduz o uso da cota do banco.
+- Presenca, posicoes ao vivo e mensagens nao sao persistidas. Supabase Broadcast/Presence
+  evita gravar historicos de chat e posicao. Ao voltar a ficar visivel ou recuperar a rede,
+  o cliente renova o token Realtime e reabre o socket para reinscrever-se no tile atual;
+  a presenca e publicada novamente e as posicoes voltam a ser transmitidas pelo ciclo do jogo.
+  O estado continua efemero: um cliente desconectado nao deixa uma posicao offline persistida.
 
 Codigo e assets do jogo podem ser versionados normalmente no repositorio. A otimizacao
 de imagens serve para reduzir o download e acelerar o carregamento, nao para contornar
@@ -99,6 +102,9 @@ selecionaveis, sem upload de imagem pelos jogadores.
 - Transmitir coordenadas em mensagens Supabase Broadcast privadas, limitadas a sala/evento
    e a uma frequencia moderada; Presence guarda apenas estado basico de conectado. Nao gravar
    trilhas, coordenadas ao vivo ou distancias no MongoDB. Descartar estado ao sair/expirar.
+   Em `visibilitychange` para visivel ou evento `online`, renovar o token e forcar a reconexao
+   do socket para que a assinatura e a presenca do tile atual sejam restabelecidas. As posicoes
+   voltam a ser enviadas pelo ciclo do jogo; nao ha fila nem historico para clientes offline.
    Os canais sao exclusivos do tile atual: ao trocar, remover a assinatura antiga antes
    de entrar na nova. Nao compartilhar posicoes ou mensagens entre tiles; ver
    [world-tiles-and-realtime.md](world-tiles-and-realtime.md).
@@ -143,9 +149,12 @@ JWT do projeto Supabase. Nunca commitar `.env`.
 Cada evento usa uma grade fixa de tiles de 5 × 5 km ancorada no centro geografico
 compartilhado. Presenca, posicoes e chat usam o canal privado exclusivo
 `event:<event_id>:tile:<tile_x>:<tile_y>`. A troca encerra imediatamente a comunicacao do
-tile anterior e requer autorizacao para o novo; nao ha compartilhamento entre tiles. A
-politica RLS correspondente esta em `supabase/realtime_policies.sql` e deve ser aplicada
-ao projeto Supabase.
+tile anterior e requer autorizacao para o novo; nao ha compartilhamento entre tiles. Em
+browsers moveis, a suspensao da pagina pode interromper o socket; ao voltar a ficar visivel,
+o cliente renova a autorizacao e reconecta ao mesmo tile. Isso restaura a comunicacao, mas
+nao persiste a ultima posicao nem mantem um jogador offline visivel. A politica RLS
+correspondente esta em `supabase/realtime_policies.sql` e deve ser aplicada ao projeto
+Supabase.
 
 1. Aplicar e validar a politica RLS de tiles no Supabase de producao.
 2. Adicionar rate limiting distribuido no gateway e limites de uso por evento.
