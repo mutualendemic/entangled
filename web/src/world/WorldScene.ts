@@ -1,5 +1,6 @@
 import Phaser from "phaser";
 import { OGA_AVATARS, getAvatarOption } from "../avatarCatalog";
+import { t } from "../i18n";
 
 export interface WorldLocation {
   name: string;
@@ -71,7 +72,7 @@ export class WorldScene extends Phaser.Scene {
   private playerX = 0;
   private playerY = 0;
   private world: WorldData = {
-    name: "Evento local",
+    name: t("Evento local"),
     center: null,
     width_m: 1200,
     height_m: 800,
@@ -128,7 +129,7 @@ export class WorldScene extends Phaser.Scene {
     this.drawCity();
     this.drawWorldBoundary();
     this.drawLocations();
-    this.player = this.makePlayer(0x9de2b1, "Voce", "moss");
+    this.player = this.makePlayer(0x9de2b1, t("Voce"), "moss");
     this.playerX = this.world.width_m / 2;
     this.playerY = this.world.height_m / 2;
     this.player.setPosition(this.playerX, this.playerY);
@@ -232,7 +233,7 @@ export class WorldScene extends Phaser.Scene {
     this.events.emit("camera-mode", true);
     if (this.satelliteEnabled) {
       void this.loadSatelliteBackground().catch((error: unknown) => {
-        this.events.emit("satellite-error", error instanceof Error ? error.message : "Falha ao carregar imagem de satelite.");
+        this.events.emit("satellite-error", t("Falha ao carregar imagem de satelite."));
       });
     }
   }
@@ -555,7 +556,7 @@ export class WorldScene extends Phaser.Scene {
 
   private async loadSatelliteBackground(): Promise<void> {
     if (!this.world.center) {
-      throw new Error("Defina o centro do evento antes de ativar o satelite.");
+      throw new Error(t("Defina o centro do evento antes de ativar o satelite."));
     }
     const requestId = ++this.satelliteRequestId;
     const originLatitude = this.world.center.lat;
@@ -577,7 +578,7 @@ export class WorldScene extends Phaser.Scene {
     image.crossOrigin = "anonymous";
     await new Promise<void>((resolve, reject) => {
       image.onload = () => resolve();
-      image.onerror = () => reject(new Error("Imagem de satelite indisponivel."));
+      image.onerror = () => reject(new Error(t("Imagem de satelite indisponivel.")));
       image.src = `${SATELLITE_EXPORT_URL}?${parameters.toString()}`;
     });
     if (!this.satelliteEnabled || requestId !== this.satelliteRequestId) {

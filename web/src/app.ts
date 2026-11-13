@@ -4,6 +4,7 @@ import { apiRequest, getToken, setToken, type Profile, type User } from "./servi
 import { startBeaconScan } from "./services/bluetooth";
 import { distanceBetween, stopWatchingLocation, watchLocation, type GeoPosition } from "./services/location";
 import { downloadRealtimeDebugLog, RealtimeSession, type ChatMessage } from "./services/realtime";
+import { getLocale, languagePickerMarkup, LOCALE_RESUME_KEY, playersOnline, setLocale, t, type Locale } from "./i18n";
 import { WorldScene, type RemotePlayer, type WorldData, type WorldFeature } from "./world/WorldScene";
 
 type AuthMode = "login" | "register" | "recovery";
@@ -16,11 +17,53 @@ interface TileTransition {
   y: number;
 }
 
+interface LanguageResumeState {
+  tileX: number;
+  tileY: number;
+  x: number;
+  y: number;
+  savedAt: number;
+}
+
+function bindLanguagePicker(root: HTMLElement, beforeReload: () => void = () => {}): void {
+  root.querySelector<HTMLSelectElement>("[data-language-select]")?.addEventListener("change", (event) => {
+    const nextLocale = (event.currentTarget as HTMLSelectElement).value as Locale;
+    if (nextLocale === getLocale()) return;
+    beforeReload();
+    setLocale(nextLocale);
+    window.location.reload();
+  });
+}
+
+function takeLanguageResumeState(): LanguageResumeState | null {
+  try {
+    const raw = sessionStorage.getItem(LOCALE_RESUME_KEY);
+    sessionStorage.removeItem(LOCALE_RESUME_KEY);
+    if (!raw) return null;
+    const state = JSON.parse(raw) as LanguageResumeState;
+    if (Date.now() - state.savedAt > 60_000
+      || ![state.tileX, state.tileY, state.x, state.y].every(Number.isFinite)) return null;
+    return state;
+  } catch {
+    return null;
+  }
+}
+
+const RESET_TOKEN_STORAGE_KEY = "entanglement.reset-token";
+
 export async function mountApp(root: HTMLElement): Promise<void> {
   const query = new URLSearchParams(window.location.search);
   const verifyToken = query.get("verify-email");
-  const resetToken = query.get("reset-password");
-  if (verifyToken || resetToken) {
+  let resetToken = query.get("reset-password");
+  if (!resetToken) {
+    try {
+      resetToken = sessionStorage.getItem(RESET_TOKEN_STORAGE_KEY);
+      sessionStorage.removeItem(RESET_TOKEN_STORAGE_KEY);
+    } catch {
+      resetToken = null;
+    }
+  }
+  if (verifyToken || query.has("reset-password")) {
     window.history.replaceState(null, "", window.location.pathname);
   }
 
@@ -31,7 +74,7 @@ export async function mountApp(root: HTMLElement): Promise<void> {
         body: { token: verifyToken },
         authenticated: false,
       });
-      renderAuth(root, "Email confirmado. Voce ja pode usar a recuperacao de senha.");
+      renderAuth(root, t("Email confirmado. Voce ja pode usar a recuperacao de senha."));
     } catch (error) {
       renderAuth(root, errorMessage(error));
     }
@@ -65,38 +108,40 @@ function renderAuth(root: HTMLElement, initialNotice = ""): void {
       <main class="gate-layout">
         <section class="gate-brand" aria-label="Entanglement">
           <div class="brand-mark" aria-hidden="true"><span></span><span></span><span></span></div>
-          <p class="eyebrow">MUNDO SOCIAL DE EVENTOS</p>
+          <p class="eyebrow">${t("MUNDO SOCIAL DE EVENTOS")}</p>
           <h1>Entanglement</h1>
-          <p class="brand-caption">Encontre pessoas, lugares e histórias no mesmo mapa.</p>
+          <p class="brand-caption">${t("Encontre pessoas, lugares e histórias no mesmo mapa.")}</p>
           <div class="map-lines" aria-hidden="true"></div>
           <span class="brand-coordinate">38°43' N&nbsp;&nbsp; 9°08' W</span>
         </section>
         <section class="gate-form-wrap">
           <div class="gate-form">
-            <p class="eyebrow">ACESSO AO EVENTO</p>
-            <div class="mode-switch" role="tablist" aria-label="Acesso">
-              <button type="button" data-mode="login" class="${mode === "login" ? "active" : ""}">Entrar</button>
-              <button type="button" data-mode="register" class="${mode === "register" ? "active" : ""}">Criar conta</button>
+            <div class="gate-locale">${languagePickerMarkup()}</div>
+            <p class="eyebrow">${t("ACESSO AO EVENTO")}</p>
+            <div class="mode-switch" role="tablist" aria-label="${t("Acesso")}">
+              <button type="button" data-mode="login" class="${mode === "login" ? "active" : ""}">${t("Entrar")}</button>
+              <button type="button" data-mode="register" class="${mode === "register" ? "active" : ""}">${t("Criar conta")}</button>
             </div>
-            <h2>${mode === "register" ? "Escolha sua identidade" : mode === "recovery" ? "Recuperar acesso" : "Bom te ver"}</h2>
-            <p class="form-caption">${mode === "register" ? "Seu nome aparece para os outros jogadores." : mode === "recovery" ? "Enviaremos um link ao email confirmado da conta." : "Entre no mundo do seu evento."}</p>
+            <h2>${t(mode === "register" ? "Escolha sua identidade" : mode === "recovery" ? "Recuperar acesso" : "Bom te ver")}</h2>
+            <p class="form-caption">${t(mode === "register" ? "Seu nome aparece para os outros jogadores." : mode === "recovery" ? "Enviaremos um link ao email confirmado da conta." : "Entre no mundo do seu evento.")}</p>
             <form id="auth-form" class="form-stack">
-              <label>Nome de jogador
-                <input name="username" autocomplete="username" minlength="3" maxlength="24" required placeholder="seu_nome" />
+              <label>${t("Nome de jogador")}
+                <input name="username" autocomplete="username" minlength="3" maxlength="24" required placeholder="${t("seu_nome")}" />
               </label>
-              ${mode === "recovery" ? "" : `<label>Senha
-                <input name="password" type="password" autocomplete="${mode === "register" ? "new-password" : "current-password"}" minlength="${mode === "register" ? "10" : "1"}" maxlength="256" required placeholder="${mode === "register" ? "10 caracteres ou mais" : "Sua senha"}" />
+              ${mode === "recovery" ? "" : `<label>${t("Senha")}
+                <input name="password" type="password" autocomplete="${mode === "register" ? "new-password" : "current-password"}" minlength="${mode === "register" ? "10" : "1"}" maxlength="256" required placeholder="${t(mode === "register" ? "10 caracteres ou mais" : "Sua senha")}" />
               </label>`}
-              ${mode === "register" ? `<fieldset class="avatar-picker"><legend>Avatar</legend><div class="avatar-options">${renderAvatarOptions(selectedAvatar)}</div></fieldset>` : ""}
-              <button class="primary-button" type="submit">${mode === "register" ? "Criar conta" : mode === "recovery" ? "Enviar link" : "Entrar no mundo"}</button>
-              ${mode === "login" ? `<button class="text-button" type="button" data-mode="recovery">Esqueci minha senha</button>` : ""}
-              ${mode === "recovery" ? `<button class="text-button" type="button" data-mode="login">Voltar ao login</button>` : ""}
-              <p class="notice" role="status">${escapeHtml(notice)}</p>
+              ${mode === "register" ? `<fieldset class="avatar-picker"><legend>${t("Avatar")}</legend><div class="avatar-options">${renderAvatarOptions(selectedAvatar)}</div></fieldset>` : ""}
+              <button class="primary-button" type="submit">${t(mode === "register" ? "Criar conta" : mode === "recovery" ? "Enviar link" : "Entrar no mundo")}</button>
+              ${mode === "login" ? `<button class="text-button" type="button" data-mode="recovery">${t("Esqueci minha senha")}</button>` : ""}
+              ${mode === "recovery" ? `<button class="text-button" type="button" data-mode="login">${t("Voltar ao login")}</button>` : ""}
+              <p class="notice" role="status">${escapeHtml(t(notice))}</p>
             </form>
           </div>
         </section>
       </main>`;
 
+    bindLanguagePicker(root);
     root.querySelectorAll<HTMLButtonElement>("[data-mode]").forEach((button) => {
       button.addEventListener("click", () => {
         mode = button.dataset.mode as AuthMode;
@@ -125,7 +170,7 @@ function renderAuth(root: HTMLElement, initialNotice = ""): void {
             body: { username },
             authenticated: false,
           });
-          draw(result.message);
+          draw(t(result.message));
           return;
         }
         const path = mode === "register" ? "/auth/register" : "/auth/login";
@@ -154,15 +199,23 @@ function renderReset(root: HTMLElement, token: string): void {
   root.innerHTML = `
     <main class="reset-layout">
       <form id="reset-form" class="gate-form reset-card">
-        <p class="eyebrow">SEGURANCA DA CONTA</p>
-        <h1>Defina uma nova senha</h1>
-        <label>Nova senha
+        <div class="gate-locale">${languagePickerMarkup()}</div>
+        <p class="eyebrow">${t("SEGURANCA DA CONTA")}</p>
+        <h1>${t("Defina uma nova senha")}</h1>
+        <label>${t("Nova senha")}
           <input name="password" type="password" minlength="10" maxlength="256" autocomplete="new-password" required />
         </label>
-        <button class="primary-button" type="submit">Atualizar senha</button>
+        <button class="primary-button" type="submit">${t("Atualizar senha")}</button>
         <p class="notice" role="status"></p>
       </form>
     </main>`;
+  bindLanguagePicker(root, () => {
+    try {
+      sessionStorage.setItem(RESET_TOKEN_STORAGE_KEY, token);
+    } catch {
+      // The reset link remains usable in this page when storage is unavailable.
+    }
+  });
   root.querySelector<HTMLFormElement>("#reset-form")?.addEventListener("submit", async (event) => {
     event.preventDefault();
     const form = event.currentTarget as HTMLFormElement;
@@ -174,8 +227,8 @@ function renderReset(root: HTMLElement, token: string): void {
         body: { token, password },
         authenticated: false,
       });
-      if (notice) notice.textContent = result.message;
-      window.setTimeout(() => renderAuth(root, result.message), 1200);
+      if (notice) notice.textContent = t(result.message);
+      window.setTimeout(() => renderAuth(root, t(result.message)), 1200);
     } catch (error) {
       if (notice) notice.textContent = errorMessage(error);
     }
@@ -183,11 +236,28 @@ function renderReset(root: HTMLElement, token: string): void {
 }
 
 async function renderGame(root: HTMLElement, user: User): Promise<void> {
+  let resumeState = takeLanguageResumeState();
   const [{ event_id: eventId, event }, { profile }, emailState] = await Promise.all([
     apiRequest<{ event_id: string; event: WorldData }>("/world"),
     apiRequest<{ profile: Profile }>("/profiles/me"),
     apiRequest<{ email: string | null; pending: boolean; verified: boolean }>("/account/email"),
   ]);
+  if (resumeState && event.center) {
+    try {
+      const authorized = await apiRequest<{ tile_x: number; tile_y: number; width_m: number; height_m: number }>("/world/tile", {
+        method: "POST",
+        body: { tile_x: resumeState.tileX, tile_y: resumeState.tileY },
+      });
+      event.tile_x = authorized.tile_x;
+      event.tile_y = authorized.tile_y;
+      event.width_m = authorized.width_m;
+      event.height_m = authorized.height_m;
+    } catch {
+      resumeState = null;
+    }
+  } else {
+    resumeState = null;
+  }
   event.width_m = Math.min(event.width_m || 5000, 5000);
   event.height_m = Math.min(event.height_m || 5000, 5000);
   if (!event.center) {
@@ -200,116 +270,116 @@ async function renderGame(root: HTMLElement, user: User): Promise<void> {
       <header class="topbar">
         <a class="wordmark" href="#world"><span class="mini-mark" aria-hidden="true">∿</span> entanglement</a>
         <div class="event-chip"><span class="live-dot"></span><span id="event-name">${escapeHtml(event.name)}</span><span class="event-id">${escapeHtml(eventId)}</span></div>
-        <div class="account-actions"><span class="account-name">${escapeHtml(profile.display_name || user.username)}</span><button class="icon-button" type="button" data-action="logout" title="Sair" aria-label="Sair">↗</button></div>
+        <div class="account-actions">${languagePickerMarkup()}<span class="account-name">${escapeHtml(profile.display_name || user.username)}</span><button class="icon-button" type="button" data-action="logout" title="${t("Sair")}" aria-label="${t("Sair")}">↗</button></div>
       </header>
       <div class="game-layout">
         <section class="world-column">
           <div class="world-toolbar">
-            <div><p class="eyebrow">MAPA DO EVENTO</p><h1>${escapeHtml(event.name)}</h1></div>
-            <div class="world-coordinates" id="location-status">${event.center ? "Localizacao desligada" : "Centro do evento pendente"}</div>
+            <div><p class="eyebrow">${t("MAPA DO EVENTO")}</p><h1>${escapeHtml(event.name)}</h1></div>
+            <div class="world-coordinates" id="location-status">${t(event.center ? "Localizacao desligada" : "Centro do evento pendente")}</div>
           </div>
           <div class="world-frame">
-            <div id="world-canvas" aria-label="Personagens e pontos do mundo"></div>
-            <div class="map-area-label">ÁREA DO EVENTO <strong>${(event.width_m / 1000).toFixed(1)} × ${(event.height_m / 1000).toFixed(1)} KM</strong></div>
+            <div id="world-canvas" aria-label="${t("Personagens e pontos do mundo")}"></div>
+            <div class="map-area-label">${t("ÁREA DO EVENTO")} <strong>${(event.width_m / 1000).toFixed(1)} × ${(event.height_m / 1000).toFixed(1)} KM</strong></div>
             <div class="city-indicator">
-              <span id="city-status" class="city-status" aria-live="polite">${event.center ? "Carregando edifícios e POIs..." : "Aguardando centro do evento"}</span>
-              <button id="city-retry" class="city-retry" type="button" title="Tentar carregar edifícios novamente" aria-label="Tentar carregar edifícios novamente" hidden>↻</button>
+              <span id="city-status" class="city-status" aria-live="polite">${t(event.center ? "Carregando edifícios e POIs..." : "Aguardando centro do evento")}</span>
+              <button id="city-retry" class="city-retry" type="button" title="${t("Tentar carregar edifícios novamente")}" aria-label="${t("Tentar carregar edifícios novamente")}" hidden>↻</button>
             </div>
-            <div id="map-credit" class="map-credit">Dados © OpenStreetMap contributors</div>
+            <div id="map-credit" class="map-credit">${t("Dados © OpenStreetMap contributors")}</div>
             <div id="map-center-prompt" class="map-center-prompt" ${event.center ? "hidden" : ""}>
               <div class="map-center-content">
-                <p class="eyebrow">MAPA DO EVENTO</p>
-                <h2>Escolha o centro da cidade</h2>
-                <p>Use uma leitura GPS para fixar o centro compartilhado e carregar edifícios nomeados e POIs no tile de 5 km.</p>
-                <button class="primary-button" id="initialize-world" type="button">Definir centro pelo GPS</button>
+                <p class="eyebrow">${t("MAPA DO EVENTO")}</p>
+                <h2>${t("Escolha o centro da cidade")}</h2>
+                <p>${t("Use uma leitura GPS para fixar o centro compartilhado e carregar edifícios nomeados e POIs no tile de 5 km.")}</p>
+                <button class="primary-button" id="initialize-world" type="button">${t("Definir centro pelo GPS")}</button>
                 <p class="notice" id="map-center-notice" role="status"></p>
               </div>
             </div>
-            <div id="movement-stick" class="movement-stick" role="application" aria-label="Controle de movimento" hidden><span class="movement-stick-knob"></span></div>
+            <div id="movement-stick" class="movement-stick" role="application" aria-label="${t("Controle de movimento")}" hidden><span class="movement-stick-knob"></span></div>
             <article id="map-feature-card" class="map-feature-card" aria-live="polite" hidden>
-              <button id="close-map-feature" class="map-feature-close" type="button" aria-label="Fechar detalhes do local">×</button>
+              <button id="close-map-feature" class="map-feature-close" type="button" aria-label="${t("Fechar detalhes do local")}">×</button>
               <span id="map-feature-kind" class="map-feature-kind"></span>
               <h2 id="map-feature-name"></h2>
               <p id="map-feature-category"></p>
-              <button id="teleport-map-feature" class="secondary-button" type="button">Teleportar para este local</button>
+              <button id="teleport-map-feature" class="secondary-button" type="button">${t("Teleportar para este local")}</button>
             </article>
-            <section id="map-destinations-panel" class="map-destinations-panel" aria-label="Destinos do mapa" hidden>
+            <section id="map-destinations-panel" class="map-destinations-panel" aria-label="${t("Destinos do mapa")}" hidden>
               <div class="map-destinations-heading">
-                <strong>Teleportar</strong>
-                <button id="close-map-destinations" class="map-feature-close" type="button" aria-label="Fechar destinos">×</button>
+                <strong>${t("Teleportar")}</strong>
+                <button id="close-map-destinations" class="map-feature-close" type="button" aria-label="${t("Fechar destinos")}">×</button>
               </div>
               <label class="teleport-search">
-                <span class="sr-only">Buscar destino no mapa</span>
-                <input id="map-poi-search" type="search" placeholder="Buscar POI" autocomplete="off" />
+                <span class="sr-only">${t("Buscar destino no mapa")}</span>
+                <input id="map-poi-search" type="search" placeholder="${t("Buscar POI")}" autocomplete="off" />
               </label>
               <div id="map-poi-list" class="poi-list" aria-live="polite"></div>
             </section>
-            <div class="zoom-controls" aria-label="Zoom do mapa">
-              <button id="zoom-in" class="zoom-button" type="button" aria-label="Ampliar mapa">+</button>
-              <button id="zoom-out" class="zoom-button" type="button" aria-label="Reduzir mapa">−</button>
-              <button id="zoom-5km" class="zoom-button zoom-reset-button" type="button" aria-label="Enquadrar tile de 5 km" title="Mostrar o tile completo de 5 km">5 km</button>
-              <button id="toggle-satellite" class="zoom-button satellite-map-button" type="button" aria-label="Ativar imagem de satelite" aria-pressed="false" title="Ativar imagem de satelite" ${event.center ? "" : "disabled"}>Sat</button>
-              <button id="fullscreen-map" class="zoom-button fullscreen-map-button" type="button" aria-label="Abrir mapa em tela cheia" title="Abrir mapa em tela cheia">⛶</button>
-              <button id="toggle-map-names" class="zoom-button map-names-button" type="button" aria-label="Mostrar nomes no mapa" aria-pressed="false" title="Mostrar nomes no mapa quando o zoom estiver aproximado">Aa</button>
-              <button id="toggle-map-destinations" class="zoom-button map-destinations-button" type="button" aria-label="Mostrar destinos" aria-expanded="false" title="Buscar e teleportar para um local">POI</button>
-              <button id="recenter-map" class="zoom-button recenter-map-button" type="button" aria-label="Voltar ao jogador" title="Centralizar no jogador" hidden>◎</button>
+            <div class="zoom-controls" aria-label="${t("Zoom do mapa")}">
+              <button id="zoom-in" class="zoom-button" type="button" aria-label="${t("Ampliar mapa")}">+</button>
+              <button id="zoom-out" class="zoom-button" type="button" aria-label="${t("Reduzir mapa")}">−</button>
+              <button id="zoom-5km" class="zoom-button zoom-reset-button" type="button" aria-label="${t("Enquadrar tile de 5 km")}" title="${t("Mostrar o tile completo de 5 km")}">5 km</button>
+              <button id="toggle-satellite" class="zoom-button satellite-map-button" type="button" aria-label="${t("Ativar imagem de satelite")}" aria-pressed="false" title="${t("Ativar imagem de satelite")}" ${event.center ? "" : "disabled"}>Sat</button>
+              <button id="fullscreen-map" class="zoom-button fullscreen-map-button" type="button" aria-label="${t("Abrir mapa em tela cheia")}" title="${t("Abrir mapa em tela cheia")}">⛶</button>
+              <button id="toggle-map-names" class="zoom-button map-names-button" type="button" aria-label="${t("Mostrar nomes no mapa")}" aria-pressed="false" title="${t("Mostrar nomes no mapa quando o zoom estiver aproximado")}">Aa</button>
+              <button id="toggle-map-destinations" class="zoom-button map-destinations-button" type="button" aria-label="${t("Mostrar destinos")}" aria-expanded="false" title="${t("Buscar e teleportar para um local")}">POI</button>
+              <button id="recenter-map" class="zoom-button recenter-map-button" type="button" aria-label="${t("Voltar ao jogador")}" title="${t("Centralizar no jogador")}" hidden>◎</button>
             </div>
           </div>
           <div class="gps-control">
             <div class="control-mode-wrap">
-              <span class="control-mode-label">Controle do jogador</span>
-              <div class="control-modes" role="radiogroup" aria-label="Controle do jogador">
+              <span class="control-mode-label">${t("Controle do jogador")}</span>
+              <div class="control-modes" role="radiogroup" aria-label="${t("Controle do jogador")}">
                 <label class="control-mode"><input type="radio" name="player-control" value="joystick" checked /><span>Joystick</span></label>
-                <label class="control-mode" title="${event.center ? "Ativar localizacao GPS continua" : "Defina primeiro o centro pelo botao do mapa"}"><input type="radio" name="player-control" value="gps" ${event.center ? "" : "disabled"} /><span>GPS</span></label>
-                <label class="control-mode" title="${event.beacons.length >= 3 ? "Posicao por beacons BLE" : "O evento precisa configurar pelo menos 3 beacons"}"><input type="radio" name="player-control" value="ble" ${event.beacons.length >= 3 ? "" : "disabled"} /><span>Bluetooth</span></label>
+                <label class="control-mode" title="${t(event.center ? "Ativar localizacao GPS continua" : "Defina primeiro o centro pelo botao do mapa")}"><input type="radio" name="player-control" value="gps" ${event.center ? "" : "disabled"} /><span>GPS</span></label>
+                <label class="control-mode" title="${t(event.beacons.length >= 3 ? "Posicao por beacons BLE" : "O evento precisa configurar pelo menos 3 beacons")}"><input type="radio" name="player-control" value="ble" ${event.beacons.length >= 3 ? "" : "disabled"} /><span>Bluetooth</span></label>
               </div>
             </div>
-            <span id="control-mode-status" class="privacy-note">Movimento manual. GPS automatico desligado.</span>
+            <span id="control-mode-status" class="privacy-note">${t("Movimento manual. GPS automatico desligado.")}</span>
           </div>
         </section>
         <aside class="social-panel">
-          <div class="panel-tabs" role="tablist" aria-label="Painel social">
-            <button type="button" data-panel="players" class="active">Jogadores</button>
-            <button type="button" data-panel="chat">Mensagens</button>
-            <button type="button" data-panel="profile">Perfil</button>
+          <div class="panel-tabs" role="tablist" aria-label="${t("Painel social")}">
+            <button type="button" data-panel="players" class="active">${t("Jogadores")}</button>
+            <button type="button" data-panel="chat">${t("Mensagens")}</button>
+            <button type="button" data-panel="profile">${t("Perfil")}</button>
           </div>
-          <p class="connection-status" id="connection-status">Conectando...</p>
+          <p class="connection-status" id="connection-status">${t("Conectando...")}</p>
           <section class="panel-content" data-panel-content="players">
-            <div class="section-heading"><h2>Por perto</h2><span id="player-count">1 online</span></div>
+            <div class="section-heading"><h2>${t("Por perto")}</h2><span id="player-count">${t("1 online")}</span></div>
             <div class="player-list" id="player-list"></div>
             <div class="teleport-panel">
-              <div class="section-heading compact-heading"><h2>Teleportar</h2><span>POIs</span></div>
+              <div class="section-heading compact-heading"><h2>${t("Teleportar")}</h2><span>POIs</span></div>
               <label class="teleport-search">
-                <span class="sr-only">Buscar destino</span>
-                <input id="poi-search" type="search" placeholder="Buscar lugar ou POI" autocomplete="off" />
+                <span class="sr-only">${t("Buscar destino")}</span>
+                <input id="poi-search" type="search" placeholder="${t("Buscar lugar ou POI")}" autocomplete="off" />
               </label>
-              <button id="teleport-gps" class="secondary-button teleport-button" type="button">Usar GPS atual</button>
+              <button id="teleport-gps" class="secondary-button teleport-button" type="button">${t("Usar GPS atual")}</button>
               <div id="poi-list" class="poi-list" aria-live="polite"></div>
             </div>
           </section>
           <section class="panel-content hidden" data-panel-content="chat">
-            <div class="section-heading"><h2>Conversa do evento</h2><span>temporaria</span></div>
+            <div class="section-heading"><h2>${t("Conversa do evento")}</h2><span>${t("temporaria")}</span></div>
             <div class="message-list" id="message-list" aria-live="polite"></div>
-            <form id="chat-form" class="chat-form"><input name="message" maxlength="500" placeholder="Escreva uma mensagem" autocomplete="off" required /><button class="send-button" type="submit" title="Enviar mensagem" aria-label="Enviar mensagem">↑</button></form>
+            <form id="chat-form" class="chat-form"><input name="message" maxlength="500" placeholder="${t("Escreva uma mensagem")}" autocomplete="off" required /><button class="send-button" type="submit" title="${t("Enviar mensagem")}" aria-label="${t("Enviar mensagem")}">↑</button></form>
           </section>
           <section class="panel-content hidden" data-panel-content="profile">
-            <div class="section-heading"><h2>Seu perfil</h2><span>visivel no evento</span></div>
+            <div class="section-heading"><h2>${t("Seu perfil")}</h2><span>${t("visivel no evento")}</span></div>
             <form id="profile-form" class="form-stack compact-form">
-              <label>Nome publico<input name="display_name" maxlength="40" value="${escapeHtml(profile.display_name)}" required /></label>
-              <label>Sobre voce<textarea name="bio" maxlength="280" rows="3">${escapeHtml(profile.bio)}</textarea></label>
-              <label>Interesses, separados por virgula<input name="interests" maxlength="320" value="${escapeHtml(profile.interests.join(", "))}" /></label>
+              <label>${t("Nome publico")}<input name="display_name" maxlength="40" value="${escapeHtml(profile.display_name)}" required /></label>
+              <label>${t("Sobre voce")}<textarea name="bio" maxlength="280" rows="3">${escapeHtml(profile.bio)}</textarea></label>
+              <label>${t("Interesses, separados por virgula")}<input name="interests" maxlength="320" value="${escapeHtml(profile.interests.join(", "))}" /></label>
               <input id="profile-avatar" name="avatar" type="hidden" value="${escapeHtml(profile.avatar)}" />
-              <fieldset class="avatar-picker profile-avatar-picker"><legend>Avatar</legend><div class="avatar-options">${renderAvatarOptions(profile.avatar, true)}</div></fieldset>
-              <button class="primary-button" type="submit">Salvar perfil</button>
+              <fieldset class="avatar-picker profile-avatar-picker"><legend>${t("Avatar")}</legend><div class="avatar-options">${renderAvatarOptions(profile.avatar, true)}</div></fieldset>
+              <button class="primary-button" type="submit">${t("Salvar perfil")}</button>
               <p class="notice" id="profile-notice" role="status"></p>
             </form>
             <div class="private-email">
-              <p class="eyebrow">RECUPERACAO PRIVADA</p>
-              <p class="email-state" id="email-state">${emailState.verified ? `Email confirmado: ${escapeHtml(emailState.email ?? "")}` : emailState.pending ? "Aguardando confirmacao do email." : "Nenhum email confirmado."}</p>
-              <form id="email-form" class="email-form"><label>Email, nao publico<input name="email" type="email" maxlength="254" autocomplete="email" value="${escapeHtml(emailState.email ?? "")}" required /></label><button class="secondary-button" type="submit">${emailState.verified ? "Atualizar email" : "Associar email"}</button><p class="notice" id="email-notice" role="status"></p></form>
+              <p class="eyebrow">${t("RECUPERACAO PRIVADA")}</p>
+              <p class="email-state" id="email-state">${emailState.verified ? t("Email confirmado: {email}", { email: escapeHtml(emailState.email ?? "") }) : emailState.pending ? t("Aguardando confirmacao do email.") : t("Nenhum email confirmado.")}</p>
+              <form id="email-form" class="email-form"><label>${t("Email, nao publico")}<input name="email" type="email" maxlength="254" autocomplete="email" value="${escapeHtml(emailState.email ?? "")}" required /></label><button class="secondary-button" type="submit">${t(emailState.verified ? "Atualizar email" : "Associar email")}</button><p class="notice" id="email-notice" role="status"></p></form>
             </div>
           </section>
-          <footer class="panel-footer">${avatarMarkup(user.avatar)}<span>Conectado como <strong>${escapeHtml(user.username)}</strong></span><button id="download-realtime-debug" class="debug-download-button" type="button" title="Descarregar logs de diagnóstico" aria-label="Descarregar logs de diagnóstico">Baixar logs</button><span class="app-version">#${__APP_VERSION__}</span></footer>
+          <footer class="panel-footer">${avatarMarkup(user.avatar)}<span>${t("Conectado como")} <strong>${escapeHtml(user.username)}</strong></span><button id="download-realtime-debug" class="debug-download-button" type="button" title="${t("Descarregar logs de diagnóstico")}" aria-label="${t("Descarregar logs de diagnóstico")}">${t("Baixar logs")}</button><span class="app-version">#${__APP_VERSION__}</span></footer>
         </aside>
       </div>
     </main>`;
@@ -336,12 +406,25 @@ async function renderGame(root: HTMLElement, user: User): Promise<void> {
   let tileY = event.tile_y ?? 0;
   let tileTransitionInProgress = false;
   let cityFeaturesRequestId = 0;
+  bindLanguagePicker(root, () => {
+    if (!scene) return;
+    try {
+      sessionStorage.setItem(LOCALE_RESUME_KEY, JSON.stringify({
+        tileX,
+        tileY,
+        ...scene.getLocalPosition(),
+        savedAt: Date.now(),
+      } satisfies LanguageResumeState));
+    } catch {
+      // A language change still works when session storage is unavailable.
+    }
+  });
   const messages = root.querySelector<HTMLElement>("#message-list")!;
   const positionList = root.querySelector<HTMLElement>("#player-list")!;
   const status = root.querySelector<HTMLElement>("#connection-status")!;
   root.querySelector<HTMLButtonElement>("#download-realtime-debug")?.addEventListener("click", () => {
     if (!downloadRealtimeDebugLog()) {
-      status.textContent = "Ainda nao ha logs de Realtime para descarregar.";
+      status.textContent = t("Ainda nao ha logs de Realtime para descarregar.");
     }
   });
   const locationStatus = root.querySelector<HTMLElement>("#location-status")!;
@@ -388,7 +471,7 @@ async function renderGame(root: HTMLElement, user: User): Promise<void> {
       { id: user.id, username: user.username, avatar: user.avatar, ...localPosition },
       ...Array.from(remotePlayers.values()),
     ];
-    root.querySelector<HTMLElement>("#player-count")!.textContent = `${online.length} online`;
+    root.querySelector<HTMLElement>("#player-count")!.textContent = playersOnline(online.length);
     positionList.replaceChildren();
     for (const player of online) {
       const row = document.createElement("div");
@@ -407,7 +490,7 @@ async function renderGame(root: HTMLElement, user: User): Promise<void> {
       const info = document.createElement("span");
       info.className = "player-info";
       const name = document.createElement("strong");
-      name.textContent = player.username + (player.id === user.id ? " (voce)" : "");
+      name.textContent = player.username + (player.id === user.id ? ` ${t("(voce)")}` : "");
       const distance = document.createElement("small");
       distance.textContent = playerDistance(player);
       info.append(name, distance);
@@ -418,9 +501,9 @@ async function renderGame(root: HTMLElement, user: User): Promise<void> {
 
   function showFeatureDetails(feature: WorldFeature): void {
     selectedFeature = feature;
-    mapFeatureKind.textContent = feature.kind === "building" ? "Edifício" : "POI";
+    mapFeatureKind.textContent = t(feature.kind === "building" ? "Edifício" : "POI");
     mapFeatureName.textContent = feature.name;
-    mapFeatureCategory.textContent = feature.category || "Categoria não informada";
+    mapFeatureCategory.textContent = feature.category || t("Categoria não informada");
     mapFeatureCard.hidden = false;
   }
 
@@ -429,7 +512,7 @@ async function renderGame(root: HTMLElement, user: User): Promise<void> {
       return;
     }
     scene.setLocalMapPosition(feature.x, feature.y);
-    locationStatus.textContent = `Teletransportado para ${feature.name}`;
+    locationStatus.textContent = t("Teletransportado para {name}", { name: feature.name });
     localSource = "local";
     drawPlayers();
   }
@@ -448,7 +531,7 @@ async function renderGame(root: HTMLElement, user: User): Promise<void> {
     if (!results.length) {
       const empty = document.createElement("p");
       empty.className = "poi-empty";
-      empty.textContent = query ? "Nenhum POI encontrado." : "Carregue o mapa do evento para ver locais.";
+      empty.textContent = t(query ? "Nenhum POI encontrado." : "Carregue o mapa do evento para ver locais.");
       list.append(empty);
       return;
     }
@@ -457,7 +540,7 @@ async function renderGame(root: HTMLElement, user: User): Promise<void> {
       const item = document.createElement("button");
       item.type = "button";
       item.className = "poi-item";
-      const meta = feature.kind === "building" ? "Edifício" : "POI";
+      const meta = t(feature.kind === "building" ? "Edifício" : "POI");
       const description = feature.category || meta;
       item.innerHTML = `
         <span class="poi-item-main">
@@ -484,7 +567,7 @@ async function renderGame(root: HTMLElement, user: User): Promise<void> {
     const requestedTileX = tileX;
     const requestedTileY = tileY;
     cityRetry.hidden = true;
-    cityStatus.textContent = "Consultando edifícios e pontos de interesse...";
+    cityStatus.textContent = t("Consultando edifícios e pontos de interesse...");
     try {
       const result = await apiRequest<{ features: WorldFeature[] }>(`/world/features?tile_x=${tileX}&tile_y=${tileY}`);
       if (requestId !== cityFeaturesRequestId || requestedTileX !== tileX || requestedTileY !== tileY) {
@@ -498,8 +581,8 @@ async function renderGame(root: HTMLElement, user: User): Promise<void> {
       const points = cityFeatures.filter((feature) => feature.kind === "poi").length;
       const waterAreas = cityFeatures.filter((feature) => feature.kind === "water").length;
       cityStatus.textContent = cityFeatures.length
-        ? `${buildings} edifícios · ${points} POIs · ${waterAreas} áreas de água`
-        : "Nenhum edifício nomeado ou POI encontrado neste tile.";
+        ? t("{buildings} edifícios · {points} POIs · {water} áreas de água", { buildings, points, water: waterAreas })
+        : t("Nenhum edifício nomeado ou POI encontrado neste tile.");
     } catch (error) {
       if (requestId !== cityFeaturesRequestId || requestedTileX !== tileX || requestedTileY !== tileY) {
         return;
@@ -525,7 +608,7 @@ async function renderGame(root: HTMLElement, user: User): Promise<void> {
     const previousTile = { tile_x: tileX, tile_y: tileY };
     let sceneChanged = false;
     const featureRequestId = ++cityFeaturesRequestId;
-    locationStatus.textContent = `Autorizando tile ${transition.tile_x}, ${transition.tile_y}...`;
+    locationStatus.textContent = t("Autorizando tile {x}, {y}...", { x: transition.tile_x, y: transition.tile_y });
     try {
       cityRetry.hidden = true;
       await realtime.leaveTile();
@@ -546,7 +629,11 @@ async function renderGame(root: HTMLElement, user: User): Promise<void> {
         );
         if (featureRequestId === cityFeaturesRequestId) {
           nextFeatures = result.features;
-          cityStatus.textContent = `${nextFeatures.filter((feature) => feature.kind === "building").length} edifícios · ${nextFeatures.filter((feature) => feature.kind === "poi").length} POIs · ${nextFeatures.filter((feature) => feature.kind === "water").length} áreas de água`;
+          cityStatus.textContent = t("{buildings} edifícios · {points} POIs · {water} áreas de água", {
+            buildings: nextFeatures.filter((feature) => feature.kind === "building").length,
+            points: nextFeatures.filter((feature) => feature.kind === "poi").length,
+            water: nextFeatures.filter((feature) => feature.kind === "water").length,
+          });
           cityRetry.hidden = true;
         }
       } catch (error) {
@@ -567,18 +654,18 @@ async function renderGame(root: HTMLElement, user: User): Promise<void> {
       renderPoiList();
       renderPoiList(mapPoiSearch, mapPoiList);
       await realtime.switchTile(tileX, tileY);
-      locationStatus.textContent = `Tile ${tileX}, ${tileY}`;
+      locationStatus.textContent = t("Tile {x}, {y}", { x: tileX, y: tileY });
       drawPlayers();
     } catch (error) {
       if (sceneChanged) {
-        locationStatus.textContent = `Tile ${tileX}, ${tileY} sem conexão: ${errorMessage(error)}`;
+        locationStatus.textContent = t("Tile {x}, {y} sem conexão: {error}", { x: tileX, y: tileY, error: errorMessage(error) });
       } else {
         scene?.cancelTileTransition();
-        locationStatus.textContent = `Mudança de tile recusada: ${errorMessage(error)}`;
+        locationStatus.textContent = t("Mudança de tile recusada: {error}", { error: errorMessage(error) });
         try {
           await realtime.switchTile(previousTile.tile_x, previousTile.tile_y);
         } catch {
-          status.textContent = "Sem conexão com o tile atual.";
+          status.textContent = t("Sem conexão com o tile atual.");
         }
       }
     } finally {
@@ -587,10 +674,10 @@ async function renderGame(root: HTMLElement, user: User): Promise<void> {
   }
 
   function playerDistance(player: RemotePlayer): string {
-    if (player.id === user.id) return localSource === "local" ? "Posicao local" : `${localSource.toUpperCase()} ±${Math.round(localAccuracy)} m`;
+    if (player.id === user.id) return localSource === "local" ? t("Posicao local") : `${localSource.toUpperCase()} ±${Math.round(localAccuracy)} m`;
     const sentAt = (player as RemotePlayer & { sentAt?: number }).sentAt;
     if (sentAt === undefined || Date.now() - sentAt > 15_000) {
-      return "GPS desatualizado";
+      return t("GPS desatualizado");
     }
     if (localSource === "gps" && player.source === "gps" && localGeo
       && player.lat !== undefined && player.lon !== undefined && player.accuracy !== undefined) {
@@ -608,7 +695,7 @@ async function renderGame(root: HTMLElement, user: User): Promise<void> {
         return `${Math.round(meters)} m ±${Math.round(Math.hypot(localAccuracy, player.accuracy))} m`;
       }
     }
-    return "Distancia indisponivel";
+    return t("Distancia indisponivel");
   }
 
   game.events.once(Phaser.Core.Events.READY, () => {
@@ -616,6 +703,7 @@ async function renderGame(root: HTMLElement, user: User): Promise<void> {
     worldScene.events.once(Phaser.Scenes.Events.CREATE, () => {
       scene = worldScene;
       worldScene.setWorld(event);
+      if (resumeState) worldScene.setLocalMapPosition(resumeState.x, resumeState.y);
       worldScene.setFeatures(cityFeatures);
       worldScene.setLocalIdentity(user.username, user.avatar);
       worldScene.events.on("position", (position: { x: number; y: number }) => {
@@ -633,9 +721,9 @@ async function renderGame(root: HTMLElement, user: User): Promise<void> {
       });
       worldScene.events.on("satellite-error", (message: string) => {
         satelliteToggleButton.setAttribute("aria-pressed", "false");
-        satelliteToggleButton.setAttribute("aria-label", "Ativar imagem de satelite");
-        satelliteToggleButton.title = "Ativar imagem de satelite";
-        mapCredit.textContent = "Dados © OpenStreetMap contributors";
+        satelliteToggleButton.setAttribute("aria-label", t("Ativar imagem de satelite"));
+        satelliteToggleButton.title = t("Ativar imagem de satelite");
+        mapCredit.textContent = t("Dados © OpenStreetMap contributors");
         void scene?.setSatelliteEnabled(false);
         status.textContent = message;
       });
@@ -654,11 +742,11 @@ async function renderGame(root: HTMLElement, user: User): Promise<void> {
   const initializeWorldButton = root.querySelector<HTMLButtonElement>("#initialize-world")!;
   initializeWorldButton.addEventListener("click", () => {
     if (!navigator.geolocation || !window.isSecureContext) {
-      centerNotice.textContent = "A localizacao requer GPS e uma conexao HTTPS.";
+      centerNotice.textContent = t("Localizacao requer GPS e uma conexao HTTPS.");
       return;
     }
     initializeWorldButton.disabled = true;
-    centerNotice.textContent = "Obtendo localizacao para configurar o evento...";
+    centerNotice.textContent = t("Obtendo localizacao para configurar o evento...");
     navigator.geolocation.getCurrentPosition(async ({ coords }) => {
       try {
         const result = await apiRequest<{ center: { lat: number; lon: number } }>("/world/center", {
@@ -673,16 +761,16 @@ async function renderGame(root: HTMLElement, user: User): Promise<void> {
         movementStick.hidden = !supportsTouch || controlMode !== "joystick";
         scene?.setWorld(event);
         const position = scene?.setLocalGeoPosition(coords.latitude, coords.longitude);
-        locationStatus.textContent = "Centro do evento configurado";
+        locationStatus.textContent = t("Centro do evento configurado");
         void loadCityFeatures();
       } catch (error) {
         centerNotice.textContent = errorMessage(error);
         initializeWorldButton.disabled = false;
       }
     }, (error) => {
-      centerNotice.textContent = error.code === error.PERMISSION_DENIED
+      centerNotice.textContent = t(error.code === error.PERMISSION_DENIED
         ? "Permita a localizacao para definir o centro do evento."
-        : "Nao foi possivel obter a localizacao GPS.";
+        : "Nao foi possivel obter a localizacao GPS.");
       initializeWorldButton.disabled = false;
     }, { enableHighAccuracy: true, maximumAge: 30_000, timeout: 15_000 });
   });
@@ -715,14 +803,14 @@ async function renderGame(root: HTMLElement, user: User): Promise<void> {
     }
     const enabled = satelliteToggleButton.getAttribute("aria-pressed") !== "true";
     satelliteToggleButton.disabled = true;
-    locationStatus.textContent = enabled ? "Carregando imagem de satelite..." : "Voltando ao mapa do jogo...";
+    locationStatus.textContent = t(enabled ? "Carregando imagem de satelite..." : "Voltando ao mapa do jogo...");
     void scene.setSatelliteEnabled(enabled).then(() => {
       satelliteToggleButton.setAttribute("aria-pressed", String(enabled));
-      satelliteToggleButton.setAttribute("aria-label", enabled ? "Desativar imagem de satelite" : "Ativar imagem de satelite");
-      satelliteToggleButton.title = enabled ? "Desativar imagem de satelite" : "Ativar imagem de satelite";
-      mapCredit.textContent = enabled
+      satelliteToggleButton.setAttribute("aria-label", t(enabled ? "Desativar imagem de satelite" : "Ativar imagem de satelite"));
+      satelliteToggleButton.title = t(enabled ? "Desativar imagem de satelite" : "Ativar imagem de satelite");
+      mapCredit.textContent = t(enabled
         ? "Imagem © Esri, Maxar, Earthstar Geographics | Dados © OpenStreetMap"
-        : "Dados © OpenStreetMap contributors";
+        : "Dados © OpenStreetMap contributors");
     }).catch((error: unknown) => {
       status.textContent = errorMessage(error);
       void scene?.setSatelliteEnabled(false);
@@ -732,8 +820,8 @@ async function renderGame(root: HTMLElement, user: User): Promise<void> {
   });
   const syncFullscreenButton = (): void => {
     const isFullscreen = document.fullscreenElement === worldFrame;
-    fullscreenMapButton.setAttribute("aria-label", isFullscreen ? "Sair da tela cheia" : "Abrir mapa em tela cheia");
-    fullscreenMapButton.title = isFullscreen ? "Sair da tela cheia" : "Abrir mapa em tela cheia";
+    fullscreenMapButton.setAttribute("aria-label", t(isFullscreen ? "Sair da tela cheia" : "Abrir mapa em tela cheia"));
+    fullscreenMapButton.title = t(isFullscreen ? "Sair da tela cheia" : "Abrir mapa em tela cheia");
     fullscreenMapButton.textContent = isFullscreen ? "×" : "⛶";
   };
   fullscreenMapButton.disabled = !document.fullscreenEnabled || typeof worldFrame.requestFullscreen !== "function";
@@ -760,10 +848,10 @@ async function renderGame(root: HTMLElement, user: User): Promise<void> {
   mapNamesButton.addEventListener("click", () => {
     const visible = mapNamesButton.getAttribute("aria-pressed") !== "true";
     mapNamesButton.setAttribute("aria-pressed", String(visible));
-    mapNamesButton.setAttribute("aria-label", visible ? "Ocultar nomes no mapa" : "Mostrar nomes no mapa");
-    mapNamesButton.title = visible
+    mapNamesButton.setAttribute("aria-label", t(visible ? "Ocultar nomes no mapa" : "Mostrar nomes no mapa"));
+    mapNamesButton.title = t(visible
       ? "Nomes ativos; visíveis quando o zoom estiver aproximado"
-      : "Mostrar nomes no mapa quando o zoom estiver aproximado";
+      : "Mostrar nomes no mapa quando o zoom estiver aproximado");
     scene?.setFeatureNamesVisible(visible);
   });
 
@@ -907,17 +995,17 @@ async function renderGame(root: HTMLElement, user: User): Promise<void> {
     if (controlMode === "gps" && localGeo) {
       const projected = scene?.setLocalGeoPosition(localGeo.lat, localGeo.lon);
       if (projected) {
-        locationStatus.textContent = "Teletransportado para o GPS atual";
+        locationStatus.textContent = t("Teletransportado para o GPS atual");
         drawPlayers();
       }
       return;
     }
     if (!navigator.geolocation || !window.isSecureContext) {
-      locationStatus.textContent = "GPS nao disponivel para teleporte imediato.";
+      locationStatus.textContent = t("GPS nao disponivel para teleporte imediato.");
       return;
     }
     teleportGpsButton.disabled = true;
-    locationStatus.textContent = "Obtendo GPS para teleporte...";
+    locationStatus.textContent = t("Obtendo GPS para teleporte...");
     navigator.geolocation.getCurrentPosition(({ coords }) => {
       const projected = scene?.setLocalGeoPosition(coords.latitude, coords.longitude);
       if (projected) {
@@ -926,12 +1014,12 @@ async function renderGame(root: HTMLElement, user: User): Promise<void> {
           localSource = "gps";
           localAccuracy = coords.accuracy || 25;
         }
-        locationStatus.textContent = "Teletransportado para o GPS atual";
+        locationStatus.textContent = t("Teletransportado para o GPS atual");
         drawPlayers();
       }
       teleportGpsButton.disabled = false;
     }, () => {
-      locationStatus.textContent = "Nao foi possivel obter a posicao GPS atual.";
+      locationStatus.textContent = t("Nao foi possivel obter a posicao GPS atual.");
       teleportGpsButton.disabled = false;
     }, { enableHighAccuracy: true, maximumAge: 30_000, timeout: 15_000 });
   });
@@ -974,28 +1062,28 @@ async function renderGame(root: HTMLElement, user: User): Promise<void> {
     movementKnob.style.transform = "translate(0, 0)";
 
     if (mode === "joystick") {
-      locationStatus.textContent = errorStatus ?? "Controle manual pelo joystick. GPS automatico desligado.";
-      controlModeStatus.textContent = errorStatus ?? "Joystick manual; GPS desligado. Sua posicao de jogo e compartilhada no tile.";
+      locationStatus.textContent = errorStatus ?? t("Controle manual pelo joystick. GPS automatico desligado.");
+      controlModeStatus.textContent = errorStatus ?? t("Joystick manual; GPS desligado. Sua posicao de jogo e compartilhada no tile.");
       drawPlayers();
       return;
     }
 
     if (mode === "gps") {
       if (!event.center) {
-        selectControlMode("joystick", "Defina primeiro o centro pelo botao GPS no mapa.");
+        selectControlMode("joystick", t("Defina primeiro o centro pelo botao GPS no mapa."));
         return;
       }
       if (!navigator.geolocation || !window.isSecureContext) {
-        selectControlMode("joystick", "GPS requer permissao e HTTPS ou localhost.");
+        selectControlMode("joystick", t("GPS requer permissao e HTTPS ou localhost."));
         return;
       }
-      controlModeStatus.textContent = "GPS ativo; sua posicao e precisao sao compartilhadas no tile atual.";
+      controlModeStatus.textContent = t("GPS ativo; sua posicao e precisao sao compartilhadas no tile atual.");
       geoWatch = watchLocation((position) => {
         if (controlMode !== "gps" || requestId !== controlModeRequestId) return;
         localGeo = position;
         localAccuracy = position.accuracy;
         localSource = "gps";
-        locationStatus.textContent = `${position.accuracy < 20 ? "GPS preciso" : "GPS estimado"} ±${Math.round(position.accuracy)} m`;
+        locationStatus.textContent = `${t(position.accuracy < 20 ? "GPS preciso" : "GPS estimado")} ±${Math.round(position.accuracy)} m`;
         scene?.setLocalGeoPosition(position.lat, position.lon);
         drawPlayers();
       }, (message) => {
@@ -1003,25 +1091,25 @@ async function renderGame(root: HTMLElement, user: User): Promise<void> {
         selectControlMode("joystick", message);
       });
       if (geoWatch < 0) {
-        selectControlMode("joystick", "Nao foi possivel iniciar o GPS.");
+        selectControlMode("joystick", t("Nao foi possivel iniciar o GPS."));
       } else {
-        locationStatus.textContent = "Aguardando GPS...";
+        locationStatus.textContent = t("Aguardando GPS...");
       }
       return;
     }
 
     if (event.beacons.length < 3) {
-      selectControlMode("joystick", "O evento precisa configurar pelo menos 3 beacons.");
+      selectControlMode("joystick", t("O evento precisa configurar pelo menos 3 beacons."));
       return;
     }
-    controlModeStatus.textContent = "Bluetooth ativo; estimativa e precisao sao compartilhadas no tile atual.";
-    locationStatus.textContent = "Solicitando permissao BLE...";
+    controlModeStatus.textContent = t("Bluetooth ativo; estimativa e precisao sao compartilhadas no tile atual.");
+    locationStatus.textContent = t("Solicitando permissao BLE...");
     void startBeaconScan(event.beacons, (estimate) => {
       if (controlMode !== "ble" || requestId !== controlModeRequestId) return;
       localAccuracy = estimate.accuracy;
       localSource = "ble";
       scene?.setLocalEventPosition(estimate.x, estimate.y);
-      locationStatus.textContent = `BLE estimado ±${Math.round(estimate.accuracy)} m`;
+      locationStatus.textContent = `${t("BLE estimado")} ±${Math.round(estimate.accuracy)} m`;
       drawPlayers();
     }).then((stop) => {
       if (requestId !== controlModeRequestId || controlMode !== "ble") {
@@ -1029,7 +1117,7 @@ async function renderGame(root: HTMLElement, user: User): Promise<void> {
         return;
       }
       stopBleScan = stop;
-      locationStatus.textContent = "Procurando beacons...";
+      locationStatus.textContent = t("Procurando beacons...");
     }).catch((error: unknown) => {
       if (requestId !== controlModeRequestId) return;
       selectControlMode("joystick", errorMessage(error));
@@ -1077,7 +1165,7 @@ async function renderGame(root: HTMLElement, user: User): Promise<void> {
         window.location.reload();
         return;
       }
-      notice.textContent = "Perfil salvo.";
+      notice.textContent = t("Perfil salvo.");
       root.querySelector<HTMLElement>(".account-name")!.textContent = result.profile.display_name;
     } catch (error) {
       notice.textContent = errorMessage(error);
@@ -1104,8 +1192,8 @@ async function renderGame(root: HTMLElement, user: User): Promise<void> {
         method: "POST",
         body: { email },
       });
-      notice.textContent = result.message;
-      root.querySelector<HTMLElement>("#email-state")!.textContent = "Aguardando confirmacao do email.";
+      notice.textContent = t(result.message);
+      root.querySelector<HTMLElement>("#email-state")!.textContent = t("Aguardando confirmacao do email.");
     } catch (error) {
       notice.textContent = errorMessage(error);
     }
@@ -1117,7 +1205,7 @@ async function renderGame(root: HTMLElement, user: User): Promise<void> {
     await realtime.stop();
     game.destroy(true);
     setToken(null);
-    renderAuth(root, "Voce saiu do evento.");
+    renderAuth(root, t("Voce saiu do evento."));
   });
 
   window.addEventListener("beforeunload", () => {
@@ -1136,7 +1224,7 @@ function appendMessage(container: HTMLElement, message: ChatMessage, mine: boole
   name.textContent = message.username;
   const time = document.createElement("time");
   time.dateTime = new Date(message.sentAt).toISOString();
-  time.textContent = new Date(message.sentAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  time.textContent = new Date(message.sentAt).toLocaleTimeString(getLocale(), { hour: "2-digit", minute: "2-digit" });
   const body = document.createElement("p");
   body.textContent = message.text;
   heading.append(name, time);
@@ -1154,7 +1242,8 @@ function renderAvatarOptions(selected: string, profile = false): string {
     const visual = avatar.image
       ? `<img src="${avatar.image}" alt="" loading="lazy" />`
       : `<span class="avatar-option-glyph">${avatarGlyph(avatar.id)}</span>`;
-    return `<button type="button" class="avatar-option ${avatar.id === selected ? "selected" : ""}" ${dataAttribute}="${avatar.id}" aria-label="${escapeHtml(avatar.name)}" title="${escapeHtml(avatar.name)}">${visual}<span class="avatar-option-name">${escapeHtml(avatar.name)}</span></button>`;
+    const translatedName = escapeHtml(t(avatar.name));
+    return `<button type="button" class="avatar-option ${avatar.id === selected ? "selected" : ""}" ${dataAttribute}="${avatar.id}" aria-label="${translatedName}" title="${translatedName}">${visual}<span class="avatar-option-name">${translatedName}</span></button>`;
   }).join("");
 }
 
@@ -1182,5 +1271,5 @@ function escapeHtml(value: string): string {
 }
 
 function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : "Ocorreu um erro inesperado";
+  return t(error instanceof Error ? error.message : "Ocorreu um erro inesperado");
 }

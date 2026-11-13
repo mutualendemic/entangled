@@ -1,3 +1,5 @@
+import { t } from "../i18n";
+
 export interface GeoPosition {
   lat: number;
   lon: number;
@@ -10,11 +12,11 @@ export function watchLocation(
   onError: (message: string) => void,
 ): number {
   if (!navigator.geolocation) {
-    onError("Este dispositivo nao disponibiliza GPS pelo navegador.");
+    onError(t("Este dispositivo nao disponibiliza GPS pelo navegador."));
     return -1;
   }
   if (!window.isSecureContext) {
-    onError("GPS requer HTTPS ou localhost.");
+    onError(t("GPS requer HTTPS ou localhost."));
     return -1;
   }
 
@@ -27,8 +29,8 @@ export function watchLocation(
     }),
     (error) => {
       const message = error.code === error.PERMISSION_DENIED
-        ? "Permissao de localizacao negada."
-        : "Nao foi possivel obter a localizacao GPS.";
+        ? t("Permissao de localizacao negada.")
+        : t("Nao foi possivel obter a localizacao GPS.");
       onError(message);
     },
     { enableHighAccuracy: true, maximumAge: 1000, timeout: 15000 },

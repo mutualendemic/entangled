@@ -1,162 +1,80 @@
-# Arquitetura
+# Architecture
 
-Este documento descreve os componentes e contratos gerais. O particionamento do mundo,
-os limites dos tiles e as conversas por area ficam detalhados em
-[world-tiles-and-realtime.md](world-tiles-and-realtime.md); manter essa separacao evita
-transformar a visao geral em um documento operacional excessivamente longo.
+This document describes the overall components and contracts. World partitioning, tile boundaries, and conversations by area are covered in detail in [world-tiles-and-realtime.md](world-tiles-and-realtime.md); keeping them separate avoids turning the overview into an excessively long operational document.
 
-## Visao geral
+## Overview
 
-- `web/`: cliente TypeScript com Phaser 3, compilado como site estatico pelo Vite.
-- `backend/`: API Flask organizada por app factory, rotas e servicos de dominio.
-- `api/index.py`: adaptador WSGI descoberto pela Vercel para executar a API Flask.
-- MongoDB Atlas: fonte persistente para contas, perfis e locais gamificados.
-- Supabase Realtime: presenca e mensagens efemeras entre jogadores.
-- OpenStreetMap/Overpass: geometrias, nomes de edificios/POIs e agua por tile fixo de 5 km;
-   Phaser renderiza volumes 2.5D sem mapa base por padrao. Uma opcao carrega imagem satelite
-   sob demanda como fundo; as camadas do jogo continuam por cima.
+- `web/`: TypeScript client with Phaser 3, compiled as a static site by Vite.
+- `backend/`: Flask API organized by app factory, routes, and domain services.
+- `api/index.py`: WSGI adapter discovered by Vercel to run the Flask API.
+- MongoDB Atlas: persistent source for accounts, profiles, and gamified locations.
+- Supabase Realtime: ephemeral presence and messages between players.
+- OpenStreetMap/Overpass: building/POI and water geometries and names for fixed 5 km tiles; Phaser renders 2.5D volumes without a basemap by default. An option loads a satellite image on demand as a background; game layers remain on top.
 
-O cliente nunca recebe credenciais MongoDB, segredos JWT ou chaves `service_role`.
-O servidor Flask valida identidade e permissao; o cliente usa apenas a chave anonima
-do Supabase e um token de curta duracao emitido pelo servidor para os canais privados.
+The client never receives MongoDB credentials, JWT secrets, or `service_role` keys. The Flask server validates identity and permissions; the client uses only the Supabase anon key and a short-lived token issued by the server for private channels.
 
-## Dominios e dados
+## Domains and data
 
-- `users`: nome de acesso normalizado, hash scrypt da senha, avatar por identificador,
-  email privado opcional e datas de criacao/alteracao.
-- `profiles`: dados publicos escolhidos pelo jogador, separados dos dados de acesso.
-- `locations`: pontos geograficos aprovados para o mundo, com coordenadas, metadados
-  publicos e referencia a arte versionada no repositorio do jogo.
-- `events`: centro geografico e configuracao da area. O centro e compartilhado por todos
-   os participantes do evento.
-- `teleport targets`: POIs e locais marcados no mapa que aparecem em uma lista filtravel por
-   busca; a busca tambem pode ser aberta sobre o mapa. Selecionar um POI mostra nome, tipo e
-   categoria; o jogador pode entao teleportar para sua coordenada local no mundo do evento.
-   O mesmo mecanismo aceita teleporte para a leitura GPS atual quando ela estiver disponivel.
-- Avatares: seis glyphs locais existentes e 34 previews selecionados da colecao OpenGameArt
-   “3/4 Directional Sprite Sets”, filtrados por licenca CC0. As imagens locais alimentam o
-   seletor de cadastro/perfil e a representacao do jogador; autores e fontes estao em
-   [avatar-assets.md](avatar-assets.md).
-- Presenca, posicoes ao vivo e mensagens nao sao persistidas. Supabase Broadcast/Presence
-  evita gravar historicos de chat e posicao. Ao voltar a ficar visivel ou recuperar a rede,
-  o cliente renova o token Realtime e reabre o socket para reinscrever-se no tile atual;
-  a presenca e publicada novamente e as posicoes voltam a ser transmitidas pelo ciclo do jogo.
-  O estado continua efemero: um cliente desconectado nao deixa uma posicao offline persistida.
+- `users`: normalized login name, scrypt password hash, avatar identifier, optional private email, and creation/update dates.
+- `profiles`: public data chosen by the player, kept separate from access data.
+- `locations`: approved geographic points for the world, with coordinates, public metadata, and a reference to versioned art in the game repository.
+- `events`: geographic center and area configuration. The center is shared by all event participants.
+- `teleport targets`: POIs and places marked on the map that appear in a filterable search list; the search can also be opened over the map. Selecting a POI shows its name, type, and category; the player can then teleport to its local coordinate in the event world. The same mechanism supports teleporting to the current GPS reading when available.
+- Avatars: six existing local glyphs and 34 previews selected from the OpenGameArt “3/4 Directional Sprite Sets” collection and filtered for CC0 licensing. The local images power the registration/profile selector and player representation; authors and sources are listed in [avatar-assets.md](avatar-assets.md).
+- Presence, live positions, and messages are not persisted. Supabase Broadcast/Presence avoids storing chat and position histories. When the page becomes visible again or the network is restored, the client refreshes the Realtime token and forces the socket to reconnect so it can resubscribe to the current tile; presence is published again and positions resume being transmitted by the game loop. State remains ephemeral: a disconnected client does not leave a persisted offline position.
 
-Codigo e assets do jogo podem ser versionados normalmente no repositorio. A otimizacao
-de imagens serve para reduzir o download e acelerar o carregamento, nao para contornar
-uma cota do Git. O MongoDB guarda metadados e referencias, nunca binarios. Caso uploads
-de jogadores sejam adicionados futuramente, devem ir para storage de objetos, nao MongoDB.
+Game code and assets can be versioned normally in the repository. Image optimization reduces downloads and speeds up loading; it is not intended to work around a Git quota. MongoDB stores metadata and references, never binaries. If player uploads are added in the future, they should go to object storage, not MongoDB.
 
-O email nunca deve aparecer no endpoint publico de perfil. Sem email associado, a conta
-nao pode usar recuperacao por email. Na primeira versao, avatares sao assets locais
-selecionaveis, sem upload de imagem pelos jogadores.
+Email must never appear in the public profile endpoint. Without an associated email, an account cannot use email recovery. In the first version, avatars are selectable local assets, with no image uploads by players.
 
-## Fluxos
+## Flows
 
-1. Cadastro e login enviam nome e senha por HTTPS para a API. Senhas sao armazenadas
-   somente como hash scrypt; respostas nao confirmam se um nome ou email existe.
-2. A API entrega tokens de sessao curtos. Um token separado, tambem curto, autoriza o
-   jogador a entrar nos canais privados de Supabase para presenca e mensagens.
-3. A API consulta edificios, POIs e agua do OpenStreetMap no tile autorizado de 5 km; Phaser
-   desenha essas feicoes sobre o mapa 2.5D ou sobre a imagem satelite opcional. O tile nao
-   inclui uma base de ruas OSM. Ao cruzar a borda, o cliente pede autorizacao para o proximo
-   tile e preserva a coordenada geografica. Arrastar o viewport desloca somente a camera.
-4. Perfil publico e configuracao privada de email usam operacoes distintas e verificadas
-    pelo dono da conta.
+1. Registration and login send the name and password over HTTPS to the API. Passwords are stored only as scrypt hashes; responses do not confirm whether a name or email exists.
+2. The API issues short-lived session tokens. A separate, also short-lived token authorizes the player to join private Supabase channels for presence and messages.
+3. The API queries OpenStreetMap for buildings, POIs, and water in the authorized 5 km tile; Phaser draws these features over the 2.5D map or the optional satellite image. The tile does not include an OSM street basemap. When crossing a boundary, the client requests authorization for the next tile and preserves the geographic coordinate. Dragging the viewport moves only the camera.
+4. Public profile operations and private email configuration use separate operations, verified by account ownership.
 
-## Posicionamento e distancia
+## Positioning and distance
 
-- O jogador escolhe um modo exclusivo: joystick/manual, GPS continuo ou BLE. No modo manual,
-   encerrar o watcher GPS e o scanner BLE; publicar somente as posicoes movidas pelo jogador.
-   Teleporte GPS pontual nao deve reativar atualizacao continua.
-- O avatar pode ser alterado em Perfil; o endpoint valida o ID permitido, salva a escolha e
-   emite um token atualizado para a identidade em Realtime.
-- O usuario pode arrastar o mapa para explorar a celula sem mover o avatar e retornar a camera
-   ao jogador por um controle dedicado. Clicar em um POI abre nome, tipo e categoria; a busca e
-   o teleporte tambem ficam acessiveis em um painel sobre o mapa.
-- Os controles de zoom incluem uma acao para enquadrar o tile completo de 5 km e outra para
-   abrir a viewport Phaser em tela cheia; o limite do tile aparece com contorno amarelo, e
-   sair da tela cheia restaura o layout normal.
-- A opcao de satelite busca a imagem do tile atual somente quando ativada, mantem POIs,
-   edificios e jogadores como overlays e mostra a atribuicao Esri/Maxar e OpenStreetMap.
-   Se a fonte de imagem falhar, o mapa 2.5D permanece disponivel.
-- Com permissao explicita durante a sessao do evento, o cliente usa Geolocation API do
-   dispositivo e envia latitude, longitude, precisao reportada e horario de captura.
-- GPS e adequado para posicionamento externo, mas a precisao varia com aparelho e ambiente;
-   a interface deve mostrar a margem de erro e nao prometer distancia exata. Ignorar leituras
-   antigas ou com precisao insuficiente e suavizar ruido sem esconder a incerteza.
-- Calcular distancia horizontal externa pela geodesica (Haversine) entre leituras recentes.
-   A incerteza combinada das duas posicoes deve acompanhar o resultado; se as margens se
-   sobrepoem, mostrar uma estimativa/faixa, nao uma distancia aparentemente exata.
-- Em locais fechados, BLE pode ser usado com beacons fixos, identificados e mapeados para
-   coordenadas conhecidas. RSSI sem uma rede de beacons calibrada so estima proximidade e
-   nao fornece posicao exata. O navegador pode nao permitir leitura BLE em todos os aparelhos;
-   oferecer fallback manual ou GPS quando disponivel.
-- Para melhorar o indoor, e necessario planejar a infraestrutura do evento e calibrar os
-   beacons no local. Precisao sub-metrica pode exigir BLE com Angle of Arrival suportado por
-   hardware compativel ou UWB; nenhum metodo deve ser assumido sem teste nos aparelhos-alvo.
-- GPS/BLE sao fontes de coordenada fisica; uma transformacao por evento converte essas
-   coordenadas para o mapa 2D gamificado. Distancias usam coordenadas fisicas validas e
-   recentes, nao a distancia visual no mapa.
-- Transmitir coordenadas em mensagens Supabase Broadcast privadas, limitadas a sala/evento
-   e a uma frequencia moderada; Presence guarda apenas estado basico de conectado. Nao gravar
-   trilhas, coordenadas ao vivo ou distancias no MongoDB. Descartar estado ao sair/expirar.
-   Em `visibilitychange` para visivel ou evento `online`, renovar o token e forcar a reconexao
-   do socket para que a assinatura e a presenca do tile atual sejam restabelecidas. As posicoes
-   voltam a ser enviadas pelo ciclo do jogo; nao ha fila nem historico para clientes offline.
-   Os canais sao exclusivos do tile atual: ao trocar, remover a assinatura antiga antes
-   de entrar na nova. Nao compartilhar posicoes ou mensagens entre tiles; ver
-   [world-tiles-and-realtime.md](world-tiles-and-realtime.md).
-- O cliente tambem deve oferecer teleporte manual para pontos conhecidos do mapa: busca por POI
-  nomeado ou edificio, lista de resultados, clique para mover o avatar para a coordenada e um
-  botao "Usar GPS atual" para reposicionar o jogador na localizacao recente do aparelho sem
-  sair do mundo do evento.
-- Pedir permissao somente ao entrar no mundo, explicar o uso para proximidade entre jogadores,
-   permitir pausar/optar por sair e nunca expor coordenadas em perfil publico. Aplicar RLS,
-   tokens curtos por evento, validacao de idade do dado e limites contra abuso.
+- The player chooses one exclusive mode: joystick/manual, continuous GPS, or BLE. In manual mode, stop the GPS watcher and BLE scanner; publish only positions moved by the player. A one-time GPS teleport must not reactivate continuous updates.
+- The avatar can be changed in Profile; the endpoint validates the allowed ID, saves the selection, and issues an updated token for the Realtime identity.
+- The user can drag the map to explore the cell without moving the avatar and return the camera to the player with a dedicated control. Clicking a POI opens its name, type, and category; search and teleport are also available in a panel over the map.
+- Zoom controls include an action to frame the full 5 km tile and another to open the Phaser viewport in fullscreen; the tile boundary is outlined in yellow, and exiting fullscreen restores the normal layout.
+- The satellite option fetches an image of the current tile only when enabled, keeps POIs, buildings, and players as overlays, and shows Esri/Maxar and OpenStreetMap attribution. If the image source fails, the 2.5D map remains available.
+- With explicit permission during the event session, the client uses the device's Geolocation API and sends latitude, longitude, reported accuracy, and capture time.
+- GPS is suitable for outdoor positioning, but accuracy varies with the device and environment; the interface must show the error margin and not promise an exact distance. Ignore stale readings or readings with insufficient accuracy, and smooth noise without hiding uncertainty.
+- Calculate outdoor horizontal distance using the geodesic (Haversine) between recent readings. The combined uncertainty of both positions must accompany the result; if the error margins overlap, show an estimate/range rather than an apparently exact distance.
+- Indoors, BLE can be used with fixed, identified beacons mapped to known coordinates. RSSI without a calibrated beacon network only estimates proximity and does not provide an exact position. The browser may not allow BLE reading on all devices; provide a manual or GPS fallback when available.
+- Improving indoor positioning requires planning the event infrastructure and calibrating the beacons on site. Sub-meter accuracy may require BLE with Angle of Arrival supported by compatible hardware or UWB; do not assume any method works without testing on the target devices.
+- GPS/BLE are sources of physical coordinates; an event-specific transform converts those coordinates to the gamified 2D map. Distances use valid, recent physical coordinates, not visual distance on the map.
+- Transmit coordinates in private Supabase Broadcast messages, limited to the room/event and a moderate frequency; Presence stores only basic connected state. Do not store trails, live coordinates, or distances in MongoDB. Discard state on exit/expiry. On `visibilitychange` to visible or an `online` event, refresh the token and force the socket to reconnect so the current tile's subscription and presence are restored. Positions resume being sent by the game loop; there is no queue or history for offline clients. Channels are exclusive to the current tile: when switching, remove the old subscription before joining the new one. Do not share positions or messages between tiles; see [world-tiles-and-realtime.md](world-tiles-and-realtime.md).
+- The client should also offer manual teleportation to known map points: search by named POI or building, show a results list, click to move the avatar to the coordinate, and provide a “Use current GPS” button to reposition the player at the device's recent location without leaving the event world.
+- Request permission only on entering the world, explain its use for proximity between players, allow pausing/opt-out, and never expose coordinates in a public profile. Apply RLS, short-lived per-event tokens, data-age validation, and abuse limits.
 
 ## API
 
-- `GET /api/health`: verificacao simples da funcao, sem depender de MongoDB/Supabase.
+- `GET /api/health`: simple function check that does not depend on MongoDB/Supabase.
 - `POST /api/auth/register`, `POST /api/auth/login`, `GET /api/auth/me`.
-- `POST /api/account/email` e `GET /api/account/email`; `POST /api/auth/verify-email`.
-- `POST /api/auth/recovery` e `POST /api/auth/reset` para email confirmado.
-- `GET /api/profiles/me`, `PATCH /api/profiles/me` e `GET /api/profiles/{username}`.
-- `GET /api/world`, `POST /api/world/center`, `POST /api/world/tile` e `PUT /api/admin/event`
-   para configurar o centro compartilhado e autorizar tiles do evento.
-- `GET /api/world/features?tile_x=<x>&tile_y=<y>` para carregar POIs e edificios da celula.
-- `POST /api/realtime/token` para autorizacao curta restrita ao usuario e ao tile atual.
+- `POST /api/account/email` and `GET /api/account/email`; `POST /api/auth/verify-email`.
+- `POST /api/auth/recovery` and `POST /api/auth/reset` for confirmed email.
+- `GET /api/profiles/me`, `PATCH /api/profiles/me`, and `GET /api/profiles/{username}`.
+- `GET /api/world`, `POST /api/world/center`, `POST /api/world/tile`, and `PUT /api/admin/event` to configure the shared center and authorize event tiles.
+- `GET /api/world/features?tile_x=<x>&tile_y=<y>` to load POIs and buildings in the cell.
+- `POST /api/realtime/token` for short-lived authorization restricted to the user and current tile.
 
-As rotas validam entradas e mantem campos publicos separados de credenciais. A politica
-Realtime confere identidade de remetente, avatar e limites de tamanho no payload. Em
-producao, aplicar rate limiting para autenticacao e recuperacao no gateway da API.
+Routes validate inputs and keep public fields separate from credentials. The Realtime policy checks sender identity, avatar, and payload size limits. In production, apply rate limiting for authentication and recovery at the API gateway.
 
-## Deploy e operacao
+## Deployment and operations
 
-Vercel publica `web/dist` e encaminha `/api/*` para o adaptador Python. Cada invocacao
-Flask e efemera: nao usar disco local para estado, uploads ou sessoes. MongoDB Atlas
-deve permitir somente conexoes do ambiente de deploy e usar timeouts/pool pequenos.
-Supabase aplica RLS nos canais privados; nao usar canais publicos para mensagens privadas.
+Vercel publishes `web/dist` and routes `/api/*` to the Python adapter. Each Flask invocation is ephemeral: do not use local disk for state, uploads, or sessions. MongoDB Atlas should allow connections only from the deployment environment and use small timeouts/pools. Supabase applies RLS to private channels; do not use public channels for private messages.
 
-Definir variaveis do `.env.example` no ambiente local e no painel da Vercel. `VITE_*`
-fica embutido no bundle e deve conter somente valores publicos. O segredo JWT de Supabase
-fica exclusivamente no servidor e precisa ser compativel com a configuracao de assinatura
-JWT do projeto Supabase. Nunca commitar `.env`.
+Set the `.env.example` variables in the local environment and in the Vercel dashboard. `VITE_*` is embedded in the bundle and must contain public values only. The Supabase JWT secret stays exclusively on the server and must be compatible with the Supabase project's JWT signing configuration. Never commit `.env`.
 
-## Estado e evolucao
+## State and evolution
 
-Cada evento usa uma grade fixa de tiles de 5 × 5 km ancorada no centro geografico
-compartilhado. Presenca, posicoes e chat usam o canal privado exclusivo
-`event:<event_id>:tile:<tile_x>:<tile_y>`. A troca encerra imediatamente a comunicacao do
-tile anterior e requer autorizacao para o novo; nao ha compartilhamento entre tiles. Em
-browsers moveis, a suspensao da pagina pode interromper o socket; ao voltar a ficar visivel,
-o cliente renova a autorizacao e reconecta ao mesmo tile. Isso restaura a comunicacao, mas
-nao persiste a ultima posicao nem mantem um jogador offline visivel. A politica RLS
-correspondente esta em `supabase/realtime_policies.sql` e deve ser aplicada ao projeto
-Supabase.
+Each event uses a fixed grid of 5 × 5 km tiles anchored at the shared geographic center. Presence, positions, and chat use the exclusive private channel `event:<event_id>:tile:<tile_x>:<tile_y>`. Switching immediately ends communication with the previous tile and requires authorization for the new one; there is no sharing between tiles. In mobile browsers, suspending the page can interrupt the socket; when the page becomes visible again, the client refreshes authorization and reconnects to the same tile. This restores communication, but does not persist the last position or keep an offline player visible. The corresponding RLS policy is in `supabase/realtime_policies.sql` and must be applied to the Supabase project.
 
-1. Aplicar e validar a politica RLS de tiles no Supabase de producao.
-2. Adicionar rate limiting distribuido no gateway e limites de uso por evento.
-3. Operar beacons BLE somente apos calibracao e testes nos aparelhos usados no evento.
-4. Adicionar observabilidade sem registrar senhas, tokens, email ou mensagens privadas.
+1. Apply and validate the tile RLS policy in production Supabase.
+2. Add distributed rate limiting at the gateway and usage limits per event.
+3. Operate BLE beacons only after calibration and testing on the devices used at the event.
+4. Add observability without logging passwords, tokens, email, or private messages.

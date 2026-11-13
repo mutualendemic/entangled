@@ -1,3 +1,5 @@
+import { t } from "../i18n";
+
 export interface BeaconConfig {
   id: string;
   service_uuid: string;
@@ -41,14 +43,14 @@ export async function startBeaconScan(
   onEstimate: (estimate: BleEstimate) => void,
 ): Promise<() => void> {
   if (!window.isSecureContext) {
-    throw new Error("BLE requer HTTPS ou localhost.");
+    throw new Error(t("BLE requer HTTPS ou localhost."));
   }
   const adapter = (navigator as NavigatorWithBle).bluetooth;
   if (!adapter?.requestLEScan) {
-    throw new Error("Este navegador nao permite scan BLE. Use GPS ou movimento manual.");
+    throw new Error(t("Este navegador nao permite scan BLE. Use GPS ou movimento manual."));
   }
   if (beacons.length < 3) {
-    throw new Error("Sao necessarios pelo menos 3 beacons mapeados para estimar a posicao.");
+    throw new Error(t("Sao necessarios pelo menos 3 beacons mapeados para estimar a posicao."));
   }
 
   const configured = new Map(beacons.map((beacon) => [beacon.id, beacon]));

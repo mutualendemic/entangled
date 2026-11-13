@@ -1,5 +1,6 @@
 import { createClient, type RealtimeChannel, type SupabaseClient } from "@supabase/supabase-js";
 import { apiRequest, type User } from "./api";
+import { t } from "../i18n";
 import type { GeoPosition } from "./location";
 import type { RemotePlayer } from "../world/WorldScene";
 
@@ -74,7 +75,7 @@ export class RealtimeSession {
 
   async start(tileX = 0, tileY = 0): Promise<void> {
     if (!SUPABASE_URL || !SUPABASE_KEY) {
-      this.onStatus("Configure Supabase para habilitar presenca e mensagens.");
+      this.onStatus(t("Configure Supabase para habilitar presenca e mensagens."));
       return;
     }
     this.client = createClient(SUPABASE_URL, SUPABASE_KEY, {
@@ -105,7 +106,7 @@ export class RealtimeSession {
 
   async sendMessage(text: string): Promise<void> {
     if (!this.channel) {
-      throw new Error("Chat indisponivel: conecte o Supabase Realtime.");
+      throw new Error(t("Chat indisponivel: conecte o Supabase Realtime."));
     }
     const message: ChatMessage = {
       id: crypto.randomUUID(),
@@ -118,7 +119,7 @@ export class RealtimeSession {
     const result = await this.channel.send({ type: "broadcast", event: "chat", payload: message });
     this.reportBroadcastResult("chat", result);
     if (result !== "ok") {
-      throw new Error(`Nao foi possivel enviar a mensagem (${result}).`);
+      throw new Error(t("Nao foi possivel enviar a mensagem ({result}).", { result }));
     }
     this.onMessage(message);
   }
@@ -161,7 +162,7 @@ export class RealtimeSession {
     if (result !== "ok") {
       if (!this.broadcastFailed) {
         this.logRealtimeDebug({ event: "broadcast_send", name: event, result });
-        this.onStatus(`Falha ao enviar ${event} (${result}). Verifique a policy Realtime.`);
+        this.onStatus(t("Falha ao enviar {event} ({result}). Verifique a policy Realtime.", { event, result }));
       }
       this.broadcastFailed = true;
       return;
@@ -169,7 +170,7 @@ export class RealtimeSession {
     if (this.broadcastFailed) {
       this.broadcastFailed = false;
       this.logRealtimeDebug({ event: "broadcast_recovered", name: event });
-      this.onStatus(`Conectado ao tile ${this.tileX}, ${this.tileY}`);
+      this.onStatus(t("Conectado ao tile {x}, {y}", { x: this.tileX, y: this.tileY }));
     }
   }
 
@@ -209,7 +210,7 @@ export class RealtimeSession {
         result: "error",
         error: error instanceof Error ? error.message : String(error),
       });
-      this.onStatus("A reconectar ao Realtime...");
+      this.onStatus(t("A reconectar ao Realtime..."));
     } finally {
       if (this.resumeReconnectInFlight === reconnect) {
         this.resumeReconnectInFlight = null;
@@ -249,7 +250,7 @@ export class RealtimeSession {
           result: "error",
           error: error instanceof Error ? error.message : String(error),
         });
-        this.onStatus("A conexao em tempo real expirou. Entre novamente no jogo.");
+        this.onStatus(t("A conexao em tempo real expirou. Entre novamente no jogo."));
       }
     })();
     this.refreshInFlight = refresh;
@@ -303,7 +304,12 @@ export class RealtimeSession {
               code: "code" in err ? err.code : undefined,
             } : null,
           });
-          this.onStatus(status === "SUBSCRIBED" ? `Conectado ao tile ${tileX}, ${tileY}` : status);
+          const statusMessage = status === "SUBSCRIBED"
+            ? t("Conectado ao tile {x}, {y}", { x: tileX, y: tileY })
+            : status === "CHANNEL_ERROR" ? t("Erro no canal Realtime.")
+              : status === "TIMED_OUT" ? t("Tempo limite da conexao Realtime excedido.")
+                : status === "CLOSED" ? t("Conexao Realtime encerrada.") : status;
+          this.onStatus(statusMessage);
           if (status === "SUBSCRIBED") {
             const presence: PresenceMeta = {
               id: this.user.id,
@@ -313,7 +319,7 @@ export class RealtimeSession {
             void channel.track(presence).then((result) => {
               this.logRealtimeDebug({ topic, event: "presence_track", result });
               if (result !== "ok") {
-                this.onStatus(`Falha ao publicar presença: ${result}`);
+                this.onStatus(t("Falha ao publicar presença: {result}", { result }));
               }
             }).catch((error: unknown) => {
               this.logRealtimeDebug({
@@ -321,11 +327,11 @@ export class RealtimeSession {
                 event: "presence_track",
                 error: error instanceof Error ? error.message : String(error),
               });
-              this.onStatus("Falha ao publicar presença no tile.");
+              this.onStatus(t("Falha ao publicar presença no tile."));
             });
             resolve();
           } else if (["CHANNEL_ERROR", "TIMED_OUT", "CLOSED"].includes(status)) {
-            reject(new Error(err ? err.message ?? "Nao foi possivel conectar ao tile autorizado." : "Nao foi possivel conectar ao tile autorizado."));
+            reject(new Error(err ? err.message ?? t("Nao foi possivel conectar ao tile autorizado.") : t("Nao foi possivel conectar ao tile autorizado.")));
           }
         });
       });

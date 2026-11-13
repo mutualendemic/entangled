@@ -1,12 +1,8 @@
-# Creditos dos avatares
+# Avatar credits
 
-O seletor inclui os seis glyphs locais do jogo e os 34 previews abaixo, selecionados da
-colecao [3/4 Directional Sprite Sets](https://opengameart.org/content/34-directional-sprite-sets).
-Na data da selecao, o arquivo de creditos da colecao indicava licenca exclusivamente CC0
-para cada um destes itens. Os previews usados pela interface estao em
-`web/public/avatars/oga/`; os IDs estaveis `oga-01` a `oga-34` sao validados pelo backend.
+The selector includes the game's six local glyphs and the 34 previews below, selected from the [3/4 Directional Sprite Sets](https://opengameart.org/content/34-directional-sprite-sets) collection. At the time of selection, the collection's credits file indicated an exclusively CC0 license for each of these items. The previews used by the interface are in `web/public/avatars/oga/`; the stable IDs `oga-01` through `oga-34` are validated by the backend.
 
-| ID | Sprite | Autor | Fonte |
+| ID | Sprite | Author | Source |
 | --- | --- | --- | --- |
 | `oga-01` | Base character | pondomaniac | https://opengameart.org/content/base-character |
 | `oga-02` | Hero | pondomaniac | https://opengameart.org/content/hero-0 |
@@ -43,5 +39,4 @@ para cada um destes itens. Os previews usados pela interface estao em
 | `oga-33` | 2D Female Character Animated Mavia | nyarlko | https://opengameart.org/content/2d-female-character-animated-mavia |
 | `oga-34` | 2D Female Character Animated Zenobia | nyarlko | https://opengameart.org/content/2d-female-character-animated-zenobia |
 
-The game stores a stable avatar ID, not image data, in each user record. Existing avatar IDs
-remain valid for accounts that already use them.
+The game stores a stable avatar ID, not image data, in each user record. Existing avatar IDs remain valid for accounts that already use them.

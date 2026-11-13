@@ -1,24 +1,21 @@
 # Entanglement
 
-Jogo social 2D para eventos: Phaser 3 no navegador, API Flask, MongoDB Atlas e
-Supabase Realtime. A Vercel publica o cliente e executa a API.
+A 2D social game for events: Phaser 3 in the browser, a Flask API, MongoDB Atlas, and Supabase Realtime. Vercel publishes the client and runs the API.
 
-## Estrutura
+## Structure
 
-Leia [docs/architecture.md](docs/architecture.md) para a visao geral e
-[docs/world-tiles-and-realtime.md](docs/world-tiles-and-realtime.md) para o desenho de
-celulas de 5 km, transicoes entre areas e conversas locais.
+See [docs/architecture.md](docs/architecture.md) for the overview and [docs/world-tiles-and-realtime.md](docs/world-tiles-and-realtime.md) for the design of 5 km cells, transitions between areas, and local conversations.
 
 ```text
-api/       adaptador Flask para Vercel
-backend/   aplicacao Flask e dominios da API
-web/       cliente Phaser + TypeScript + Vite
-tests/     testes da API
+api/       Flask adapter for Vercel
+backend/   Flask application and API domains
+web/       Phaser client + TypeScript + Vite
+tests/     API tests
 ```
 
-## Desenvolvimento local
+## Local development
 
-Requisitos: Python 3.11+, Node.js 20+ e MongoDB local ou Atlas.
+Requirements: Python 3.11+, Node.js 20+, and local MongoDB or Atlas.
 
 ```sh
 cp .env.example .env
@@ -29,49 +26,25 @@ npm install
 npm run dev
 ```
 
-Abra http://localhost:5173. O comando inicia Flask em `localhost:5000` e o Vite,
-que encaminha `/api` para Flask. `npm run dev:web` e `npm run dev:api` iniciam os
-servicos separadamente. Rode `pytest` para os testes da API e `npm run build` para
-validar o cliente de producao.
+Open http://localhost:5173. The command starts Flask at `localhost:5000` and Vite, which forwards `/api` to Flask. `npm run dev:web` and `npm run dev:api` start the services separately. Run `pytest` for the API tests and `npm run build` to validate the production client.
 
-Configure `MONGODB_URI`, `JWT_SECRET` e `EVENT_ADMIN_TOKEN` no `.env`. `JWT_SECRET`
-deve ser uma chave aleatoria longa e exclusiva deste projeto. No desenvolvimento local,
-uma chave efemera e gerada se ela estiver ausente; sessoes expiram ao reiniciar o servidor.
-Na Vercel, configure `JWT_SECRET` explicitamente. Para chat e
-presenca, configure as tres variaveis Supabase e aplique
-[`supabase/realtime_policies.sql`](supabase/realtime_policies.sql) no projeto. Para
-associar email e recuperar senha, configure o servidor SMTP. Sem SMTP, os fluxos de
-email retornam erro de configuracao e nenhuma conta confirma endereco.
+Set `MONGODB_URI`, `JWT_SECRET`, and `EVENT_ADMIN_TOKEN` in `.env`. `JWT_SECRET` must be a long, unique random key for this project. During local development, an ephemeral key is generated if it is missing; sessions expire when the server restarts. On Vercel, set `JWT_SECRET` explicitly. For chat and presence, set all three Supabase variables and apply [`supabase/realtime_policies.sql`](supabase/realtime_policies.sql) to the project. To associate an email and recover passwords, configure the SMTP server. Without SMTP, email flows return a configuration error and no account can confirm its address.
 
-Em ambientes sem `/etc/resolv.conf` usando URI `mongodb+srv`, `MONGODB_DNS_NAMESERVERS`
-define os servidores DNS separados por virgula. O padrao `1.1.1.1,8.8.8.8` segue o
-fallback usado no projeto Flutu; ajuste-o se a rede exigir resolvedores diferentes.
+In environments without `/etc/resolv.conf` that use a `mongodb+srv` URI, `MONGODB_DNS_NAMESERVERS` sets the DNS servers as a comma-separated list. The default `1.1.1.1,8.8.8.8` follows the fallback used in the Flutu project; adjust it if the network requires different resolvers.
 
-Valores `VITE_*` sao incorporados ao bundle e devem ser publicos. Nunca use neles
-segredos JWT, senha SMTP, token administrativo ou chave Supabase `service_role`.
+`VITE_*` values are embedded in the bundle and must be public. Never put JWT secrets, the SMTP password, the admin token, or the Supabase `service_role` key in them.
 
-## Funcionalidades
+## Features
 
-- Cadastro com nome, senha protegida com scrypt e avatar predefinido; login e sessao JWT curta.
-- Perfil publico com nome, bio e interesses; email de recuperacao separado, privado
-	e utilizavel somente depois da confirmacao por link.
-- Cidade 2.5D no Phaser com volumes de edificios nomeados e POIs do OpenStreetMap,
-	limitado a 5 × 5 km; sem imagem de mapa ou ruas ao fundo.
-- Se o evento ainda nao tiver centro, um participante define o ponto inicial com uma
-	leitura GPS unica; esse centro fica compartilhado no evento. O GPS continuo continua
-	opcional e separado.
-- GPS opcional; coordenadas ao vivo sao transmitidas apenas a membros
-	autenticados do evento e nao sao persistidas. O chat tambem e temporario.
-- Distancias aproximadas acompanhadas pela margem de erro dos dois aparelhos.
+- Registration with a name, a password protected with scrypt, and a predefined avatar; login and a short-lived JWT session.
+- Public profile with name, bio, and interests; a separate, private recovery email that can be used only after confirmation through a link.
+- A 2.5D Phaser city with named building volumes and OpenStreetMap POIs, limited to 5 × 5 km; no map image or background streets.
+- If an event does not yet have a center, a participant sets the initial point with a one-time GPS reading; that center is shared across the event. Continuous GPS remains optional and separate.
+- Optional GPS; live coordinates are transmitted only to authenticated event members and are not persisted. Chat is also temporary.
+- Approximate distances accompanied by the error margin of both devices.
 
-GPS exige permissao do participante e HTTPS fora de `localhost`. A precisao depende do
-aparelho e do ambiente. O navegador nao oferece acesso BLE confiavel e multiplataforma
-para ranging; indoor com BLE exige beacons mapeados, hardware testado e uma integracao
-compativel com os aparelhos do evento. Consulte [docs/architecture.md](docs/architecture.md).
+GPS requires the participant's permission and HTTPS except on `localhost`. Accuracy depends on the device and environment. The browser does not provide reliable, cross-platform BLE access for ranging; indoor BLE requires mapped beacons, tested hardware, and integration compatible with the event's devices. See [docs/architecture.md](docs/architecture.md).
 
-## Configurar um evento
+## Configure an event
 
-O mapa comeca como um espaco local sem coordenadas reais. Um organizador pode cadastrar
-o centro, dimensoes em metros e ate 100 locais fisicos usando `PUT /api/admin/event` e
-o header `X-Admin-Token` definido em `EVENT_ADMIN_TOKEN`. Nenhuma imagem precisa ir ao
-MongoDB; assets do jogo ficam no repositorio e o banco guarda somente metadados.
+The map starts as a local space without real-world coordinates. An organizer can register the center, dimensions in meters, and up to 100 physical locations using `PUT /api/admin/event` and the `X-Admin-Token` header set in `EVENT_ADMIN_TOKEN`. No images need to be stored in MongoDB; game assets are in the repository and the database stores metadata only.

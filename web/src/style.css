@@ -39,6 +39,10 @@ button:disabled { cursor: wait; opacity: .6; }
 .brand-coordinate { position: absolute; right: 28px; bottom: 24px; color: #9cad9d; font: 10px var(--mono); }
 .gate-form-wrap { display: grid; place-items: center; padding: 32px; background: #101816; }
 .gate-form { width: min(100%, 400px); }
+.gate-locale { display: flex; justify-content: flex-end; margin-bottom: 12px; }
+.language-picker { display: inline-flex; align-items: center; }
+.language-select { min-height: 32px; padding: 4px 26px 4px 8px; border: 1px solid #435448; border-radius: 4px; background: #151f1a; color: #dce5dc; font: 10px var(--mono); cursor: pointer; }
+.language-select:focus-visible { outline: 2px solid var(--bright); outline-offset: 2px; }
 .gate-form h2, .reset-card h1 { margin: 34px 0 8px; color: var(--paper); font-size: 29px; line-height: 1.2; }
 .form-caption { margin: 0 0 28px; color: var(--muted); font-size: 14px; }
 .mode-switch { display: flex; gap: 5px; padding: 4px; border: 1px solid var(--line); border-radius: 6px; background: #141d19; }
@@ -84,6 +88,7 @@ button:disabled { cursor: wait; opacity: .6; }
 .event-id { padding-left: 9px; border-left: 1px solid var(--line); color: var(--muted); font: 10px var(--mono); }
 .live-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--bright); box-shadow: 0 0 0 4px #b7e5a51c; }
 .account-actions { display: flex; align-items: center; gap: 12px; }
+.account-actions .language-select { max-width: 118px; min-height: 30px; }
 .account-name { max-width: 150px; overflow: hidden; color: #cbd6cc; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
 .icon-button { width: 34px; height: 34px; border: 1px solid var(--line); border-radius: 4px; background: transparent; color: #dbe5dc; font-size: 17px; cursor: pointer; }
 .icon-button:hover { border-color: var(--bright); }
