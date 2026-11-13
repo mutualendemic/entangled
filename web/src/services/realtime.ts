@@ -32,6 +32,7 @@ export class RealtimeSession {
   private positions = new Map<string, PositionPayload>();
   private tileX = 0;
   private tileY = 0;
+  private broadcastFailed = false;
 
   constructor(
     private readonly user: User,
@@ -66,7 +67,8 @@ export class RealtimeSession {
       sentAt: Date.now(),
     };
     this.positions.set(this.user.id, payload);
-    await this.channel.send({ type: "broadcast", event: "position", payload });
+    const result = await this.channel.send({ type: "broadcast", event: "position", payload });
+    this.reportBroadcastResult("position", result);
   }
 
   async sendMessage(text: string): Promise<void> {
@@ -81,7 +83,11 @@ export class RealtimeSession {
       text,
       sentAt: Date.now(),
     };
-    await this.channel.send({ type: "broadcast", event: "chat", payload: message });
+    const result = await this.channel.send({ type: "broadcast", event: "chat", payload: message });
+    this.reportBroadcastResult("chat", result);
+    if (result !== "ok") {
+      throw new Error(`Nao foi possivel enviar a mensagem (${result}).`);
+    }
     this.onMessage(message);
   }
 
@@ -130,6 +136,22 @@ export class RealtimeSession {
     console.warn("Realtime debug:", context);
   }
 
+  private reportBroadcastResult(event: "chat" | "position", result: string): void {
+    if (result !== "ok") {
+      if (!this.broadcastFailed) {
+        this.logRealtimeDebug({ event: "broadcast_send", name: event, result });
+        this.onStatus(`Falha ao enviar ${event} (${result}). Verifique a policy Realtime.`);
+      }
+      this.broadcastFailed = true;
+      return;
+    }
+    if (this.broadcastFailed) {
+      this.broadcastFailed = false;
+      this.logRealtimeDebug({ event: "broadcast_recovered", name: event });
+      this.onStatus(`Conectado ao tile ${this.tileX}, ${this.tileY}`);
+    }
+  }
+
   private async refreshAccessToken(): Promise<void> {
     try {
       if (!this.client) {
@@ -157,7 +179,7 @@ export class RealtimeSession {
     this.tileX = tileX;
     this.tileY = tileY;
     const channel = this.client.channel(topic, {
-      config: { private: true, presence: { key: this.user.id }, broadcast: { self: false } },
+      config: { private: true, presence: { key: this.user.id }, broadcast: { self: false, ack: true } },
     });
     this.channel = channel;
     channel

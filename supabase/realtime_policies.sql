@@ -1,5 +1,3 @@
-alter table realtime.messages enable row level security;
-
 drop policy if exists "event members can receive private realtime messages" on realtime.messages;
 drop policy if exists "event members can send private realtime messages" on realtime.messages;
 drop policy if exists "event members can track presence in the same tile" on realtime.messages;
@@ -24,6 +22,10 @@ with check (
     || ':' || (select auth.jwt() ->> 'tile_y')
   and (
     realtime.messages.extension = 'presence'
+    or (
+      realtime.messages.extension = 'broadcast'
+      and realtime.messages.event in ('chat', 'position')
+    )
     or (
       payload ? 'id'
       and payload ->> 'id' = (select auth.jwt() ->> 'sub')
