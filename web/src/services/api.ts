@@ -32,6 +32,7 @@ export async function apiRequest<T>(path: string, options: {
   method?: string;
   body?: unknown;
   authenticated?: boolean;
+  cache?: RequestCache;
 } = {}): Promise<T> {
   const headers = new Headers({ "Content-Type": "application/json" });
   const token = getToken();
@@ -43,6 +44,7 @@ export async function apiRequest<T>(path: string, options: {
     method: options.method ?? "GET",
     headers,
     body: options.body === undefined ? undefined : JSON.stringify(options.body),
+    cache: options.cache,
   });
   const result = await response.json().catch(() => ({}));
   if (!response.ok) {

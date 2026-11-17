@@ -26,7 +26,7 @@ export interface WorldData {
 export interface WorldFeature {
   id: string;
   name: string;
-  kind: "building" | "poi" | "water";
+  kind: "building" | "poi" | "water" | "road" | "rail";
   category: string;
   x: number;
   y: number;
@@ -60,6 +60,25 @@ const AVATAR_COLORS: Record<string, number> = {
   sun: 0xf0d36e,
   comet: 0xc3a7ee,
   bloom: 0xed9ab8,
+};
+const RAIL_WIDTHS: Record<string, number> = {
+  rail: 2.4,
+  narrow_gauge: 1.8,
+  light_rail: 2,
+  subway: 2.2,
+  tram: 1.8,
+  monorail: 1.8,
+  funicular: 1.8,
+};
+const ROAD_WIDTHS: Record<string, number> = {
+  motorway: 7,
+  motorway_link: 5.5,
+  trunk: 6.5,
+  trunk_link: 5,
+  primary: 5.5,
+  primary_link: 4.5,
+  secondary: 4.5,
+  secondary_link: 3.8,
 };
 const BUILDING_PALETTES = [
   { roof: 0xb9c99a, wall: 0x758c68, side: 0x4c644f, trim: 0xd5d9ae },
@@ -607,7 +626,7 @@ export class WorldScene extends Phaser.Scene {
     }
     this.poiIconObjects = [];
 
-    const renderOrder = { water: 0, building: 1, poi: 2 } as const;
+    const renderOrder = { water: 0, rail: 1, road: 2, building: 3, poi: 4 } as const;
     const features = [...this.cityFeatures].sort((first, second) => (
       renderOrder[first.kind] - renderOrder[second.kind] || first.y - second.y
     ));
@@ -615,6 +634,14 @@ export class WorldScene extends Phaser.Scene {
     for (const feature of features) {
       if (feature.kind === "water") {
         this.drawWater(feature);
+        continue;
+      }
+      if (feature.kind === "rail") {
+        this.drawRail(feature);
+        continue;
+      }
+      if (feature.kind === "road") {
+        this.drawRoad(feature);
         continue;
       }
       if (feature.kind === "building" && feature.points.length >= 3) {
@@ -632,6 +659,48 @@ export class WorldScene extends Phaser.Scene {
         }
       }
     }
+  }
+
+  private drawRail(feature: WorldFeature): void {
+    if (feature.points.length < 2) return;
+    const width = RAIL_WIDTHS[feature.category] ?? 2;
+    this.strokePolyline(feature.points, width + 10, 0x9b59b6, 0.16);
+    for (const offset of [-2, 2]) {
+      const railPoints = this.offsetPolyline(feature.points, offset);
+      this.strokePolyline(railPoints, width + 1, 0x9b59b6, 0.95);
+      this.strokePolyline(railPoints, Math.max(0.7, width * 0.4), 0xf0d4ff, 0.95);
+    }
+  }
+
+  private offsetPolyline(points: Array<[number, number]>, offset: number): Array<[number, number]> {
+    return points.map((point, index) => {
+      const previous = points[Math.max(0, index - 1)];
+      const next = points[Math.min(points.length - 1, index + 1)];
+      const dx = next[0] - previous[0];
+      const dy = next[1] - previous[1];
+      const length = Math.hypot(dx, dy) || 1;
+      return [point[0] - dy / length * offset, point[1] + dx / length * offset] as [number, number];
+    });
+  }
+
+  private drawRoad(feature: WorldFeature): void {
+    if (feature.points.length < 2) return;
+    const width = ROAD_WIDTHS[feature.category] ?? 3.5;
+    this.strokePolyline(feature.points, width + 13, 0x006bff, 0.1);
+    this.strokePolyline(feature.points, width + 7, 0x008dff, 0.2);
+    this.strokePolyline(feature.points, width + 3, 0x00bfff, 0.42);
+    this.strokePolyline(feature.points, width, 0x00d9ff, 0.95);
+    this.strokePolyline(feature.points, Math.max(0.7, width * 0.2), 0xc8faff, 0.9);
+  }
+
+  private strokePolyline(points: Array<[number, number]>, width: number, color: number, alpha: number): void {
+    this.cityGraphics.lineStyle(width, color, alpha);
+    this.cityGraphics.beginPath();
+    this.cityGraphics.moveTo(points[0][0], points[0][1]);
+    for (const [x, y] of points.slice(1)) {
+      this.cityGraphics.lineTo(x, y);
+    }
+    this.cityGraphics.strokePath();
   }
 
   private drawWater(feature: WorldFeature): void {

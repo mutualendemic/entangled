@@ -137,7 +137,7 @@ def get_world_features():
         return jsonify({"error": "Os dados de edificios estao temporariamente indisponiveis"}), 503
 
     response = jsonify({"features": features, "attribution": "OpenStreetMap contributors"})
-    response.headers["Cache-Control"] = "private, max-age=3600"
+    response.headers["Cache-Control"] = "private, no-store"
     return response, 200
 
 

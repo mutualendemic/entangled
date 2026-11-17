@@ -573,7 +573,10 @@ async function renderGame(root: HTMLElement, user: User): Promise<void> {
     cityRetry.hidden = true;
     cityStatus.textContent = t("Consultando edifícios e pontos de interesse...");
     try {
-      const result = await apiRequest<{ features: WorldFeature[] }>(`/world/features?tile_x=${tileX}&tile_y=${tileY}`);
+      const result = await apiRequest<{ features: WorldFeature[] }>(
+        `/world/features?tile_x=${tileX}&tile_y=${tileY}`,
+        { cache: "no-store" },
+      );
       if (requestId !== cityFeaturesRequestId || requestedTileX !== tileX || requestedTileY !== tileY) {
         return;
       }
@@ -584,8 +587,10 @@ async function renderGame(root: HTMLElement, user: User): Promise<void> {
       const buildings = cityFeatures.filter((feature) => feature.kind === "building").length;
       const points = cityFeatures.filter((feature) => feature.kind === "poi").length;
       const waterAreas = cityFeatures.filter((feature) => feature.kind === "water").length;
+      const roads = cityFeatures.filter((feature) => feature.kind === "road").length;
+      const railways = cityFeatures.filter((feature) => feature.kind === "rail").length;
       cityStatus.textContent = cityFeatures.length
-        ? t("{buildings} edifícios · {points} POIs · {water} áreas de água", { buildings, points, water: waterAreas })
+        ? t("{buildings} edifícios · {points} POIs · {water} áreas de água · {roads} estradas · {railways} ferrovias", { buildings, points, water: waterAreas, roads, railways })
         : t("Nenhum edifício nomeado ou POI encontrado neste tile.");
     } catch (error) {
       if (requestId !== cityFeaturesRequestId || requestedTileX !== tileX || requestedTileY !== tileY) {
@@ -630,13 +635,16 @@ async function renderGame(root: HTMLElement, user: User): Promise<void> {
       try {
         const result = await apiRequest<{ features: WorldFeature[] }>(
           `/world/features?tile_x=${authorizedTile.tile_x}&tile_y=${authorizedTile.tile_y}`,
+          { cache: "no-store" },
         );
         if (featureRequestId === cityFeaturesRequestId) {
           nextFeatures = result.features;
-          cityStatus.textContent = t("{buildings} edifícios · {points} POIs · {water} áreas de água", {
+          cityStatus.textContent = t("{buildings} edifícios · {points} POIs · {water} áreas de água · {roads} estradas · {railways} ferrovias", {
             buildings: nextFeatures.filter((feature) => feature.kind === "building").length,
             points: nextFeatures.filter((feature) => feature.kind === "poi").length,
             water: nextFeatures.filter((feature) => feature.kind === "water").length,
+            roads: nextFeatures.filter((feature) => feature.kind === "road").length,
+            railways: nextFeatures.filter((feature) => feature.kind === "rail").length,
           });
           cityRetry.hidden = true;
         }

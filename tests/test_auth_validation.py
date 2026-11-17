@@ -6,7 +6,8 @@ import pytest
 from backend.app import create_app
 from backend.app.config import Config, _jwt_secret
 from backend.app.database import configure_dns_resolver
-from backend.app.osm_features import _bounds, _overpass_query, parse_osm_elements
+import backend.app.osm_features as osm_features
+from backend.app.osm_features import _bounds, _overpass_query, _overpass_rail_query, _overpass_road_query, parse_osm_elements
 from backend.app.routes import auth, profiles, world
 from backend.app.security import create_access_token
 import dns.resolver
@@ -354,7 +355,7 @@ def test_realtime_token_is_scoped_to_requested_tile(monkeypatch):
     assert claims["tile_y"] == 3
 
 
-def test_osm_features_parse_named_buildings_and_pois_without_roads():
+def test_osm_features_parse_named_buildings_pois_and_major_roads():
     elements = [
         {"type": "node", "id": 13, "lat": 0.0, "lon": 0.0, "tags": {"amenity": "cafe", "name": "Cafe da Praca"}},
         {
@@ -369,6 +370,18 @@ def test_osm_features_parse_named_buildings_and_pois_without_roads():
             ],
             "tags": {"building": "museum", "name": "Museu Central", "building:levels": "4"},
         },
+        {
+            "type": "way",
+            "id": 17,
+            "geometry": [{"lat": 0.0, "lon": -0.03}, {"lat": 0.0, "lon": 0.03}],
+            "tags": {"highway": "primary", "name": "Avenida Tron"},
+        },
+        {
+            "type": "way",
+            "id": 18,
+            "geometry": [{"lat": 0.001, "lon": -0.03}, {"lat": 0.001, "lon": 0.03}],
+            "tags": {"railway": "rail", "name": "Linha de Comboio"},
+        },
         {"type": "node", "id": 15, "lat": 0.00005, "lon": 0.00005, "tags": {"amenity": "cafe", "name": "Cafe da Praca"}},
         {"type": "node", "id": 16, "lat": 0.0001, "lon": 0.0001, "tags": {"railway": "stop_position", "name": "Paragem Central"}},
         {"type": "way", "id": 14, "tags": {"building": "yes"}},
@@ -376,14 +389,36 @@ def test_osm_features_parse_named_buildings_and_pois_without_roads():
 
     features = parse_osm_elements(elements, {"lat": 0.0, "lon": 0.0}, 5000, 5000)
 
-    assert [feature["name"] for feature in features] == ["Museu Central", "Cafe da Praca"]
+    assert [feature["name"] for feature in features] == [
+        "Museu Central", "Cafe da Praca", "Linha de Comboio", "Avenida Tron",
+    ]
     assert features[0]["kind"] == "building"
     assert features[0]["height_m"] == 12.8
     assert len(features[0]["points"]) == 4
     assert features[1]["kind"] == "poi"
-    assert all(feature["kind"] != "road" for feature in features)
+    rail = features[2]
+    assert rail["kind"] == "rail"
+    assert rail["category"] == "rail"
+    assert rail["points"][0] == pytest.approx((0, 2388.7), abs=1)
+    assert rail["points"][-1] == pytest.approx((5000, 2388.7), abs=1)
+    road = features[3]
+    assert road["kind"] == "road"
+    assert road["category"] == "primary"
+    assert road["points"][0] == pytest.approx((0, 2500), abs=1)
+    assert road["points"][-1] == pytest.approx((5000, 2500), abs=1)
     query = _overpass_query({"lat": 0, "lon": 0}, 5000, 5000)
+    road_query = _overpass_road_query({"lat": 0, "lon": 0}, 5000, 5000)
+    rail_query = _overpass_rail_query({"lat": 0, "lon": 0}, 5000, 5000)
     assert '"highway"' not in query
+    assert 'way["highway"~' in road_query
+    assert "residential" not in road_query
+    assert "tertiary" not in road_query
+    assert ".roads out geom;" not in query
+    assert road_query.endswith("out geom;")
+    assert 'way["railway"~' in rail_query
+    assert "|rail|" in rail_query
+    assert '"abandoned"' not in rail_query
+    assert rail_query.endswith("out geom;")
     assert '"stop_position"' not in query
     assert 'way["building"]["name"]' in query
     assert 'way["natural"="water"]' in query
@@ -391,6 +426,87 @@ def test_osm_features_parse_named_buildings_and_pois_without_roads():
     assert ".waters out geom;" in query
     assert ".pois out center;" in query
     assert query.index(".pois out center;") < query.index(".buildings out center geom;")
+
+
+def test_get_osm_features_fetches_roads_separately(monkeypatch):
+    monkeypatch.setattr(osm_features, "_fetch_elements", lambda *args: [
+        {"type": "node", "id": 1, "lat": 0, "lon": 0, "tags": {"amenity": "cafe", "name": "Cafe"}},
+    ])
+    monkeypatch.setattr(osm_features, "_fetch_road_elements", lambda *args: [
+        {
+            "type": "way", "id": 2,
+            "geometry": [{"lat": 0, "lon": -0.02}, {"lat": 0, "lon": 0.02}],
+            "tags": {"highway": "primary", "name": "Avenida"},
+        },
+    ])
+    monkeypatch.setattr(osm_features, "_fetch_rail_elements", lambda *args: [
+        {
+            "type": "way", "id": 3,
+            "geometry": [{"lat": 0.001, "lon": -0.02}, {"lat": 0.001, "lon": 0.02}],
+            "tags": {"railway": "rail", "name": "Linha"},
+        },
+    ])
+    app = create_app()
+    with app.app_context():
+        features = osm_features.get_osm_features("separate-roads", {"lat": 0, "lon": 0}, 5000, 5000)
+
+    assert {feature["kind"] for feature in features} == {"poi", "road", "rail"}
+
+
+def test_road_query_failure_does_not_discard_city_features(monkeypatch):
+    monkeypatch.setattr(osm_features, "_fetch_elements", lambda *args: [
+        {"type": "node", "id": 1, "lat": 0, "lon": 0, "tags": {"amenity": "cafe", "name": "Cafe"}},
+    ])
+
+    def fail_road_query(*args):
+        raise osm_features.OSMUnavailableError("TimeoutError")
+
+    monkeypatch.setattr(osm_features, "_fetch_road_elements", fail_road_query)
+    monkeypatch.setattr(osm_features, "_fetch_rail_elements", lambda *args: [])
+    app = create_app()
+    with app.app_context():
+        features = osm_features.get_osm_features("roads-timeout", {"lat": 0, "lon": 0}, 5000, 5000)
+
+    assert len(features) == 1
+    assert features[0]["kind"] == "poi"
+
+
+def test_osm_road_features_are_capped():
+    elements = [
+        {
+            "type": "way",
+            "id": index,
+            "geometry": [
+                {"lat": index / 1_000_000, "lon": -0.002},
+                {"lat": index / 1_000_000, "lon": 0.002},
+            ],
+            "tags": {"highway": "secondary"},
+        }
+        for index in range(350)
+    ]
+
+    features = parse_osm_elements(elements, {"lat": 0.0, "lon": 0.0}, 5000, 5000)
+
+    assert sum(feature["kind"] == "road" for feature in features) == 300
+
+
+def test_osm_rail_features_are_capped():
+    elements = [
+        {
+            "type": "way",
+            "id": index,
+            "geometry": [
+                {"lat": index / 1_000_000, "lon": -0.002},
+                {"lat": index / 1_000_000, "lon": 0.002},
+            ],
+            "tags": {"railway": "rail"},
+        }
+        for index in range(175)
+    ]
+
+    features = parse_osm_elements(elements, {"lat": 0.0, "lon": 0.0}, 5000, 5000)
+
+    assert sum(feature["kind"] == "rail" for feature in features) == 150
 
 
 def test_osm_water_polygons_are_returned_as_water_features():
@@ -533,7 +649,7 @@ def test_world_features_returns_named_osm_items_for_configured_event(monkeypatch
         "features": [{"id": "way/12", "name": "Museu Central", "kind": "building"}],
         "attribution": "OpenStreetMap contributors",
     }
-    assert response.headers["Cache-Control"] == "private, max-age=3600"
+    assert response.headers["Cache-Control"] == "private, no-store"
 
 
 def test_world_features_uses_requested_tile_center(monkeypatch):

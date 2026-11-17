@@ -171,7 +171,7 @@ const englishTranslations: Record<string, string> = {
   "Este navegador nao permite scan BLE. Use GPS ou movimento manual.": "This browser does not support BLE scanning. Use GPS or manual movement.",
   "Sao necessarios pelo menos 3 beacons mapeados para estimar a posicao.": "At least 3 mapped beacons are required to estimate a position.",
   "Nenhum": "None",
-  "{buildings} edifícios · {points} POIs · {water} áreas de água": "{buildings} buildings · {points} POIs · {water} water areas",
+  "{buildings} edifícios · {points} POIs · {water} áreas de água · {roads} estradas · {railways} ferrovias": "{buildings} buildings · {points} POIs · {water} water areas · {roads} roads · {railways} rail lines",
   "Coordenadas de tile invalidas": "Invalid tile coordinates",
   "Defina o centro do evento antes de mudar de tile": "Set the event center before changing tiles",
   "Tile fora da area geografica suportada": "Tile is outside the supported geographic area",

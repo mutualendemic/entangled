@@ -19,7 +19,17 @@ MAX_FEATURES = 700
 MAX_BUILDINGS = 350
 MAX_POIS = MAX_FEATURES - MAX_BUILDINGS
 MAX_WATER_FEATURES = 100
+MAX_ROADS = 300
+MAX_RAIL_FEATURES = 150
+MAIN_ROAD_VALUES = {"motorway", "trunk", "primary", "secondary"}
+ROAD_PRIORITY = {"motorway": 0, "trunk": 1, "primary": 2, "secondary": 3}
+RAILWAY_VALUES = {"rail", "narrow_gauge", "light_rail", "subway", "tram", "monorail", "funicular"}
+RAILWAY_PRIORITY = {
+    "rail": 0, "narrow_gauge": 1, "light_rail": 2, "subway": 3,
+    "tram": 4, "monorail": 5, "funicular": 6,
+}
 CACHE_TTL_SECONDS = 3600
+CACHE_FAILURE_TTL_SECONDS = 60
 MAX_QUERY_EDGE_METERS = 5000
 WATER_TAG_VALUES = {
     "basin", "canal", "dock", "lake", "lagoon", "moat", "ocean", "pond",
@@ -123,6 +133,31 @@ def _clip_segment(first, second, width_m, height_m):
         (first[0] + start * delta_x, first[1] + start * delta_y),
         (first[0] + end * delta_x, first[1] + end * delta_y),
     )
+
+
+def _clip_polyline(points, width_m, height_m):
+    lines = []
+    current = []
+
+    def finish_line():
+        if len(current) >= 2 and math.dist(current[0], current[-1]) > 1e-4:
+            lines.append(current[:])
+
+    for first, second in zip(points, points[1:]):
+        clipped = _clip_segment(first, second, width_m, height_m)
+        if clipped is None:
+            finish_line()
+            current = []
+            continue
+        clipped_first, clipped_second = clipped
+        if current and math.dist(current[-1], clipped_first) <= 1e-4:
+            if math.dist(current[-1], clipped_second) > 1e-4:
+                current.append(clipped_second)
+        else:
+            finish_line()
+            current = [clipped_first, clipped_second]
+    finish_line()
+    return lines
 
 
 def _boundary_position(point, width_m, height_m):
@@ -290,6 +325,60 @@ def parse_osm_elements(elements, center, width_m, height_m):
                 features.append(feature)
             continue
 
+        road_category = tags.get("highway", "")
+        if road_category in MAIN_ROAD_VALUES:
+            projected_points = []
+            for node in element.get("geometry") or []:
+                try:
+                    projected_points.append(project_coordinates(
+                        float(node["lat"]), float(node["lon"]), center, width_m, height_m
+                    ))
+                except (KeyError, TypeError, ValueError):
+                    continue
+            base_id = f"{element.get('type', 'way')}/{element.get('id', len(features))}"
+            for line_index, line in enumerate(_clip_polyline(projected_points, width_m, height_m)):
+                feature_id = f"{base_id}:road:{line_index}"
+                if feature_id in seen:
+                    continue
+                seen.add(feature_id)
+                features.append({
+                    "id": feature_id,
+                    "name": str(tags.get("name", "")).strip(),
+                    "kind": "road",
+                    "category": road_category,
+                    "x": sum(point[0] for point in line) / len(line),
+                    "y": sum(point[1] for point in line) / len(line),
+                    "points": line,
+                })
+            continue
+
+        rail_category = tags.get("railway", "")
+        if rail_category in RAILWAY_VALUES:
+            projected_points = []
+            for node in element.get("geometry") or []:
+                try:
+                    projected_points.append(project_coordinates(
+                        float(node["lat"]), float(node["lon"]), center, width_m, height_m
+                    ))
+                except (KeyError, TypeError, ValueError):
+                    continue
+            base_id = f"{element.get('type', 'way')}/{element.get('id', len(features))}"
+            for line_index, line in enumerate(_clip_polyline(projected_points, width_m, height_m)):
+                feature_id = f"{base_id}:rail:{line_index}"
+                if feature_id in seen:
+                    continue
+                seen.add(feature_id)
+                features.append({
+                    "id": feature_id,
+                    "name": str(tags.get("name", "")).strip(),
+                    "kind": "rail",
+                    "category": rail_category,
+                    "x": sum(point[0] for point in line) / len(line),
+                    "y": sum(point[1] for point in line) / len(line),
+                    "points": line,
+                })
+            continue
+
         kind = "building" if tags.get("building") else "poi"
         name = str(tags.get("name", "")).strip()
         category = _feature_category(tags, kind)
@@ -359,6 +448,21 @@ def parse_osm_elements(elements, center, width_m, height_m):
     waters = sorted((feature for feature in features if feature["kind"] == "water"), key=sort_key)
     buildings = sorted((feature for feature in features if feature["kind"] == "building"), key=sort_key)
     pois = sorted((feature for feature in features if feature["kind"] == "poi"), key=sort_key)
+    road_groups = {
+        category: sorted(
+            (feature for feature in features if feature["kind"] == "road" and feature["category"] == category),
+            key=lambda feature: (
+                -sum(math.dist(first, second) for first, second in zip(feature["points"], feature["points"][1:])),
+                feature["id"],
+            ),
+        )
+        for category in ROAD_PRIORITY
+    }
+    roads = []
+    for index in range(max((len(group) for group in road_groups.values()), default=0)):
+        for category in sorted(ROAD_PRIORITY, key=ROAD_PRIORITY.get):
+            if index < len(road_groups[category]):
+                roads.append(road_groups[category][index])
     selected = waters[:MAX_WATER_FEATURES] + buildings[:MAX_BUILDINGS] + pois[:MAX_POIS]
     remaining = MAX_FEATURES - len(selected)
     if remaining:
@@ -366,6 +470,23 @@ def parse_osm_elements(elements, center, width_m, height_m):
         remaining = MAX_FEATURES - len(selected)
     if remaining:
         selected.extend(pois[MAX_POIS:MAX_POIS + remaining])
+    selected.extend(roads[:MAX_ROADS])
+    rail_groups = {
+        category: sorted(
+            (feature for feature in features if feature["kind"] == "rail" and feature["category"] == category),
+            key=lambda feature: (
+                -sum(math.dist(first, second) for first, second in zip(feature["points"], feature["points"][1:])),
+                feature["id"],
+            ),
+        )
+        for category in RAILWAY_PRIORITY
+    }
+    railways = []
+    for index in range(max((len(group) for group in rail_groups.values()), default=0)):
+        for category in sorted(RAILWAY_PRIORITY, key=RAILWAY_PRIORITY.get):
+            if index < len(rail_groups[category]):
+                railways.append(rail_groups[category][index])
+    selected.extend(railways[:MAX_RAIL_FEATURES])
     return sorted(selected, key=lambda feature: (feature["kind"], feature["name"].casefold(), feature["id"]))
 
 
@@ -401,6 +522,20 @@ def _overpass_query(center, width_m, height_m):
     )
 
 
+def _overpass_road_query(center, width_m, height_m):
+    west, south, east, north = _bounds(center, width_m, height_m)
+    bounds = f"{south},{west},{north},{east}"
+    road_values = "|".join(sorted(MAIN_ROAD_VALUES))
+    return f'[out:json][timeout:8];way["highway"~"^({road_values})$"]({bounds});out geom;'
+
+
+def _overpass_rail_query(center, width_m, height_m):
+    west, south, east, north = _bounds(center, width_m, height_m)
+    bounds = f"{south},{west},{north},{east}"
+    rail_values = "|".join(sorted(RAILWAY_VALUES))
+    return f'[out:json][timeout:8];way["railway"~"^({rail_values})$"]({bounds});out geom;'
+
+
 def _bounds(center, width_m, height_m):
     width_m = min(float(width_m), MAX_QUERY_EDGE_METERS)
     height_m = min(float(height_m), MAX_QUERY_EDGE_METERS)
@@ -414,8 +549,8 @@ def _bounds(center, width_m, height_m):
     )
 
 
-def _fetch_elements(center, width_m, height_m):
-    payload = urllib.parse.urlencode({"data": _overpass_query(center, width_m, height_m)}).encode()
+def _fetch_overpass_query(query):
+    payload = urllib.parse.urlencode({"data": query}).encode()
     request = urllib.request.Request(
         current_app.config.get("OSM_OVERPASS_URL", OVERPASS_URL),
         data=payload,
@@ -426,7 +561,7 @@ def _fetch_elements(center, width_m, height_m):
         method="POST",
     )
     try:
-        with urllib.request.urlopen(request, timeout=6) as response:
+        with urllib.request.urlopen(request, timeout=12) as response:
             raw = response.read(MAX_RESPONSE_BYTES + 1)
     except urllib.error.HTTPError as error:
         raise OSMUnavailableError(f"HTTP_{error.code}") from error
@@ -441,6 +576,18 @@ def _fetch_elements(center, width_m, height_m):
     if not isinstance(data, dict) or data.get("remark"):
         raise OSMUnavailableError("OverpassError")
     return data.get("elements", [])
+
+
+def _fetch_elements(center, width_m, height_m):
+    return _fetch_overpass_query(_overpass_query(center, width_m, height_m))
+
+
+def _fetch_road_elements(center, width_m, height_m):
+    return _fetch_overpass_query(_overpass_road_query(center, width_m, height_m))
+
+
+def _fetch_rail_elements(center, width_m, height_m):
+    return _fetch_overpass_query(_overpass_rail_query(center, width_m, height_m))
 
 
 def _fetch_osm_map_features(center, width_m, height_m):
@@ -490,7 +637,9 @@ def _fetch_osm_map_features(center, width_m, height_m):
         named_building = bool(tags.get("building") and tags.get("name"))
         named_poi = bool(tags.get("name") and poi_keys.intersection(tags))
         water = bool(_water_category(tags))
-        if not (named_building or named_poi or water):
+        main_road = tags.get("highway") in MAIN_ROAD_VALUES
+        railway = tags.get("railway") in RAILWAY_VALUES
+        if not (named_building or named_poi or water or main_road or railway):
             continue
         geometry = [nodes[ref.attrib["ref"]] for ref in way.findall("nd") if ref.attrib.get("ref") in nodes]
         if not geometry:
@@ -515,8 +664,22 @@ def get_osm_features(event_id, center, width_m, height_m):
     cached = cache.get(key)
     if cached and cached[0] > now:
         return cached[1]
+    cache_ttl = CACHE_TTL_SECONDS
     try:
-        features = parse_osm_elements(_fetch_elements(center, width_m, height_m), center, width_m, height_m)
+        elements = _fetch_elements(center, width_m, height_m)
+        features = parse_osm_elements(elements, center, width_m, height_m)
+        try:
+            road_elements = _fetch_road_elements(center, width_m, height_m)
+            features.extend(parse_osm_elements(road_elements, center, width_m, height_m))
+        except OSMUnavailableError as road_error:
+            cache_ttl = CACHE_FAILURE_TTL_SECONDS
+            current_app.logger.warning("OSM main road query failed (%s)", road_error.reason)
+        try:
+            rail_elements = _fetch_rail_elements(center, width_m, height_m)
+            features.extend(parse_osm_elements(rail_elements, center, width_m, height_m))
+        except OSMUnavailableError as rail_error:
+            cache_ttl = CACHE_FAILURE_TTL_SECONDS
+            current_app.logger.warning("OSM railway query failed (%s)", rail_error.reason)
     except OSMUnavailableError as overpass_error:
         try:
             features = _fetch_osm_map_features(center, width_m, height_m)
@@ -524,7 +687,7 @@ def get_osm_features(event_id, center, width_m, height_m):
             raise OSMUnavailableError(
                 f"Overpass_{overpass_error.reason};OSM_MAP_{fallback_error.reason}"
             ) from fallback_error
-    cache[key] = (now + CACHE_TTL_SECONDS, features)
+    cache[key] = (now + cache_ttl, features)
     if len(cache) > 24:
         for expired_key in [cache_key for cache_key, value in cache.items() if value[0] <= now]:
             cache.pop(expired_key, None)
