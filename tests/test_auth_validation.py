@@ -49,6 +49,29 @@ def test_registration_rejects_invalid_username_without_database():
     assert response.status_code == 400
 
 
+@pytest.mark.parametrize("avatar", ["pixel-knight", "minotaur-bull-human-axe-labyrinth"])
+def test_registration_accepts_added_avatar(monkeypatch, avatar):
+    inserted_users = []
+
+    class FakeUsers:
+        @staticmethod
+        def insert_one(user):
+            inserted_users.append(user)
+
+    monkeypatch.setattr(auth, "get_database", lambda: SimpleNamespace(users=FakeUsers()))
+    app = create_app()
+    app.config["JWT_SECRET"] = "test-jwt-secret-with-at-least-32-bytes"
+
+    response = app.test_client().post(
+        "/api/auth/register",
+        json={"username": "sprite_player", "password": "long-enough-password", "avatar": avatar},
+    )
+
+    assert response.status_code == 201
+    assert response.get_json()["user"]["avatar"] == avatar
+    assert inserted_users[0]["avatar"] == avatar
+
+
 def test_registration_rejects_short_password_without_database():
     client = create_app().test_client()
 

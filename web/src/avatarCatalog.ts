@@ -1,3 +1,5 @@
+import { STATIC_AVATARS } from "./staticAvatarCatalog";
+
 export interface AvatarOption {
   id: string;
   name: string;
@@ -5,6 +7,15 @@ export interface AvatarOption {
   image?: string;
   source?: string;
   license?: string;
+  sprite?: {
+    slug: string;
+    idleAction: string;
+    moveAction: string;
+    facing: "left" | "right";
+    pixelArt: boolean;
+    idleFps: number;
+    moveFps: number;
+  };
 }
 
 export const BUILTIN_AVATARS: AvatarOption[] = [
@@ -54,8 +65,21 @@ export const OGA_AVATARS: AvatarOption[] = [
   { id: "oga-34", name: "2D Female Character Animated Zenobia", author: "nyarlko", image: "/avatars/oga/oga-34.png", source: "https://opengameart.org/content/2d-female-character-animated-zenobia", license: "CC0 1.0" },
 ];
 
-export const AVATAR_OPTIONS: AvatarOption[] = [...BUILTIN_AVATARS, ...OGA_AVATARS];
+const SPRITECANVAS_AVATARS: AvatarOption[] = [
+  { id: "cyberpunk-ninja", name: "Cyberpunk Ninja", license: "CC0 1.0", sprite: { slug: "cyberpunk-ninja", idleAction: "idle", moveAction: "run", facing: "right", pixelArt: false, idleFps: 9, moveFps: 12 } },
+  { id: "pixel-knight", name: "Pixel Iron Knight", license: "CC0 1.0", sprite: { slug: "pixel-knight", idleAction: "idle", moveAction: "walk", facing: "right", pixelArt: true, idleFps: 8, moveFps: 10 } },
+  { id: "cozy-witch", name: "Cozy Apothecary Witch", license: "CC0 1.0", sprite: { slug: "cozy-witch", idleAction: "idle", moveAction: "walk", facing: "right", pixelArt: false, idleFps: 8, moveFps: 10 } },
+  { id: "slime-boss", name: "Crown Slime Boss", license: "CC0 1.0", sprite: { slug: "slime-boss", idleAction: "idle", moveAction: "hop", facing: "left", pixelArt: false, idleFps: 8, moveFps: 12 } },
+  { id: "mech-bot", name: "Rustwalker MechBot", license: "CC0 1.0", sprite: { slug: "mech-bot", idleAction: "idle", moveAction: "march", facing: "right", pixelArt: false, idleFps: 8, moveFps: 10 } },
+  { id: "pixel-rogue", name: "Pixel Shadow Rogue", license: "CC0 1.0", sprite: { slug: "pixel-rogue", idleAction: "idle", moveAction: "run", facing: "right", pixelArt: true, idleFps: 8, moveFps: 12 } },
+  { id: "lantern-samurai", name: "Blue-Flame Ronin", license: "CC0 1.0", sprite: { slug: "lantern-samurai", idleAction: "idle", moveAction: "walk", facing: "right", pixelArt: false, idleFps: 8, moveFps: 10 } },
+  { id: "pixel-necromancer", name: "Pixel Bone Mage", license: "CC0 1.0", sprite: { slug: "pixel-necromancer", idleAction: "idle", moveAction: "walk", facing: "right", pixelArt: true, idleFps: 8, moveFps: 10 } },
+  { id: "forest-archer", name: "Sylvan Ranger", license: "CC0 1.0", sprite: { slug: "forest-archer", idleAction: "idle", moveAction: "run", facing: "right", pixelArt: false, idleFps: 8, moveFps: 12 } },
+  { id: "pixel-slime-king", name: "Pixel Crystal Slime", license: "CC0 1.0", sprite: { slug: "pixel-slime-king", idleAction: "idle", moveAction: "bounce", facing: "left", pixelArt: true, idleFps: 8, moveFps: 10 } },
+];
+
+export const AVATAR_OPTIONS: AvatarOption[] = [...BUILTIN_AVATARS, ...STATIC_AVATARS, ...SPRITECANVAS_AVATARS];
 
 export function getAvatarOption(id: string): AvatarOption | undefined {
-  return AVATAR_OPTIONS.find((avatar) => avatar.id === id);
+  return AVATAR_OPTIONS.find((avatar) => avatar.id === id) ?? OGA_AVATARS.find((avatar) => avatar.id === id);
 }

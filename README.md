@@ -36,7 +36,7 @@ In environments without `/etc/resolv.conf` that use a `mongodb+srv` URI, `MONGOD
 
 ## Features
 
-- Registration with a name, a password protected with scrypt, and a predefined avatar; login and a short-lived JWT session.
+- Registration with a name, a password protected with scrypt, and a selectable avatar; the SpriteCanvas CC0 characters use idle and movement animations in the Phaser world. Login uses a short-lived JWT session.
 - Public profile with name, bio, and interests; a separate, private recovery email that can be used only after confirmation through a link.
 - A 2.5D Phaser city with named building volumes and OpenStreetMap POIs, limited to 5 × 5 km; no map image or background streets.
 - If an event does not yet have a center, a participant sets the initial point with a one-time GPS reading; that center is shared across the event. Continuous GPS remains optional and separate.

@@ -1,0 +1,11 @@
+CC0 1.0 Universal (Public Domain Dedication)
+
+To the extent possible under law, SpriteCanvas has waived all copyright and related or neighboring
+rights to the sprite sheets in these 10 packs. You can copy, modify, distribute and use them,
+including for commercial purposes, without asking permission or giving credit.
+
+Full legal text: https://creativecommons.org/publicdomain/zero/1.0/legalcode
+
+AI disclosure: Base character designs and action sequences were generated using AI workflows
+and processed cleanly into aligned transparent RGBA sprite sheets, JSON Hash atlases, and
+Godot 4 SpriteFrames packages.

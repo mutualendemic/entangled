@@ -479,7 +479,11 @@ async function renderGame(root: HTMLElement, user: User): Promise<void> {
       const avatar = document.createElement("span");
       avatar.className = `avatar-chip avatar-${player.avatar}`;
       const avatarOption = getAvatarOption(player.avatar);
-      if (avatarOption?.image) {
+      if (avatarOption?.sprite) {
+        avatar.classList.add("avatar-chip-sprite");
+        avatar.style.backgroundImage = `url("/sprites/${avatarOption.sprite.slug}/${avatarOption.sprite.slug}-${avatarOption.sprite.idleAction}.png")`;
+        if (avatarOption.sprite.pixelArt) avatar.classList.add("pixel-art");
+      } else if (avatarOption?.image) {
         const image = document.createElement("img");
         image.src = avatarOption.image;
         image.alt = "";
@@ -1239,9 +1243,11 @@ function appendMessage(container: HTMLElement, message: ChatMessage, mine: boole
 function renderAvatarOptions(selected: string, profile = false): string {
   return AVATAR_OPTIONS.map((avatar) => {
     const dataAttribute = profile ? "data-profile-avatar" : "data-avatar";
-    const visual = avatar.image
-      ? `<img src="${avatar.image}" alt="" loading="lazy" />`
-      : `<span class="avatar-option-glyph">${avatarGlyph(avatar.id)}</span>`;
+    const visual = avatar.sprite
+      ? `<span class="avatar-sprite-preview ${avatar.sprite.pixelArt ? "pixel-art" : ""}" style="background-image:url('/sprites/${avatar.sprite.slug}/${avatar.sprite.slug}-${avatar.sprite.idleAction}.png')" aria-hidden="true"></span>`
+      : avatar.image
+        ? `<img src="${avatar.image}" alt="" loading="lazy" />`
+        : `<span class="avatar-option-glyph">${avatarGlyph(avatar.id)}</span>`;
     const translatedName = escapeHtml(t(avatar.name));
     return `<button type="button" class="avatar-option ${avatar.id === selected ? "selected" : ""}" ${dataAttribute}="${avatar.id}" aria-label="${translatedName}" title="${translatedName}">${visual}<span class="avatar-option-name">${translatedName}</span></button>`;
   }).join("");
@@ -1249,6 +1255,10 @@ function renderAvatarOptions(selected: string, profile = false): string {
 
 function avatarMarkup(avatar: string): string {
   const option = getAvatarOption(avatar);
+  if (option?.sprite) {
+    const pixelArt = option.sprite.pixelArt ? " pixel-art" : "";
+    return `<span class="avatar-chip avatar-chip-sprite${pixelArt}" style="background-image:url('/sprites/${option.sprite.slug}/${option.sprite.slug}-${option.sprite.idleAction}.png')" aria-hidden="true"></span>`;
+  }
   if (option?.image) {
     return `<span class="avatar-chip"><img src="${option.image}" alt="" /></span>`;
   }

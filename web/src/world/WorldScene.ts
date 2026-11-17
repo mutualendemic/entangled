@@ -1,5 +1,6 @@
 import Phaser from "phaser";
-import { OGA_AVATARS, getAvatarOption } from "../avatarCatalog";
+import { AVATAR_OPTIONS, OGA_AVATARS, getAvatarOption } from "../avatarCatalog";
+import { STATIC_AVATARS } from "../staticAvatarCatalog";
 import { t } from "../i18n";
 
 export interface WorldLocation {
@@ -83,6 +84,8 @@ export class WorldScene extends Phaser.Scene {
   private cursors!: Phaser.Types.Input.Keyboard.CursorKeys;
   private remotes = new Map<string, Phaser.GameObjects.Container>();
   private lastBroadcast = 0;
+  private localLastMovedAt = -Infinity;
+  private localFacingX = 0;
   private touchVector = new Phaser.Math.Vector2();
   private locationObjects: Phaser.GameObjects.GameObject[] = [];
   private cityGraphics!: Phaser.GameObjects.Graphics;
@@ -115,14 +118,23 @@ export class WorldScene extends Phaser.Scene {
   }
 
   preload(): void {
-    for (const avatar of OGA_AVATARS) {
+    for (const avatar of [...STATIC_AVATARS, ...OGA_AVATARS]) {
       if (avatar.image) {
         this.load.image(avatar.id, avatar.image);
+      }
+    }
+    for (const avatar of AVATAR_OPTIONS) {
+      if (!avatar.sprite) continue;
+      for (const action of [avatar.sprite.idleAction, avatar.sprite.moveAction]) {
+        const textureKey = `${avatar.id}-${action}`;
+        const basePath = `/sprites/${avatar.sprite.slug}/${avatar.sprite.slug}-${action}`;
+        this.load.atlas(textureKey, `${basePath}.png`, `${basePath}.json`);
       }
     }
   }
 
   create(): void {
+    this.createAvatarAnimations();
     this.cityGraphics = this.add.graphics();
     this.worldBoundary = this.add.graphics().setDepth(15);
     this.cameras.main.setZoom(WORLD_CAMERA_ZOOM);
@@ -162,7 +174,8 @@ export class WorldScene extends Phaser.Scene {
           - Number(this.keys.up.isDown || this.cursors.up.isDown)
         : 0) + this.touchVector.y,
     ).normalize();
-    if (!this.tileTransitionPending && movement.lengthSq() > 0) {
+    const isMoving = !this.tileTransitionPending && movement.lengthSq() > 0;
+    if (isMoving) {
       const speed = PLAYER_SPEED * (delta / 1000);
       const nextX = this.playerX + movement.x * speed;
       const nextY = this.playerY + movement.y * speed;
@@ -181,6 +194,12 @@ export class WorldScene extends Phaser.Scene {
         }
         this.player.setPosition(this.playerX, this.playerY);
       }
+    }
+    if (isMoving && Math.abs(movement.x) > 0.01) this.localFacingX = movement.x;
+    this.setAvatarAnimation(this.player, isMoving || time - this.localLastMovedAt < 400, movement.x || this.localFacingX);
+    for (const remote of this.remotes.values()) {
+      const lastMovedAt = Number(remote.getData("lastMovedAt") ?? -Infinity);
+      this.setAvatarAnimation(remote, time - lastMovedAt < 400, Number(remote.getData("facingX") ?? 0));
     }
 
     if (time - this.lastBroadcast >= 250) {
@@ -448,16 +467,31 @@ export class WorldScene extends Phaser.Scene {
     if (this.tileTransitionPending) {
       return;
     }
+    const previousX = this.playerX;
+    const previousY = this.playerY;
     [this.playerX, this.playerY] = this.nearestWalkablePosition(x, y);
     this.player.setPosition(this.playerX, this.playerY);
+    const deltaX = this.playerX - previousX;
+    if (Math.hypot(deltaX, this.playerY - previousY) > 0.5) {
+      this.localLastMovedAt = this.time.now;
+      if (Math.abs(deltaX) > 0.01) this.localFacingX = deltaX;
+    }
   }
 
   updateRemotePlayer(remote: RemotePlayer): void {
     let container = this.remotes.get(remote.id);
     if (!container) {
       container = this.makePlayer(AVATAR_COLORS[remote.avatar] ?? 0x79c6d4, remote.username, remote.avatar);
+      container.setData("lastPositionX", remote.x).setData("lastPositionY", remote.y).setData("lastMovedAt", -Infinity);
       this.remotes.set(remote.id, container);
     } else {
+      const deltaX = remote.x - Number(container.getData("lastPositionX") ?? remote.x);
+      const deltaY = remote.y - Number(container.getData("lastPositionY") ?? remote.y);
+      if (Math.hypot(deltaX, deltaY) > 0.5) {
+        container.setData("lastMovedAt", this.time.now);
+        if (Math.abs(deltaX) > 0.01) container.setData("facingX", deltaX);
+      }
+      container.setData("lastPositionX", remote.x).setData("lastPositionY", remote.y);
       this.updatePlayerStyle(container, AVATAR_COLORS[remote.avatar] ?? 0x79c6d4, remote.username, remote.avatar);
     }
     container.setPosition(remote.x, remote.y);
@@ -481,7 +515,15 @@ export class WorldScene extends Phaser.Scene {
   }
 
   private makeAvatarVisual(color: number, avatar: string): Phaser.GameObjects.GameObject {
-    if (getAvatarOption(avatar)?.image && this.textures.exists(avatar)) {
+    const option = getAvatarOption(avatar);
+    if (option?.sprite) {
+      const { slug, idleAction } = option.sprite;
+      const sprite = this.add.sprite(0, 0, `${avatar}-${idleAction}`, `${slug}-${idleAction}-00`);
+      sprite.setScale(0.14).setOrigin(0.5, 0.875).setDepth(1);
+      sprite.play(`${avatar}-idle`);
+      return sprite;
+    }
+    if (option?.image && this.textures.exists(avatar)) {
       const sprite = this.add.image(0, 0, avatar);
       const frame = sprite.frame;
       const scale = 28 / Math.max(frame.width, frame.height);
@@ -503,6 +545,43 @@ export class WorldScene extends Phaser.Scene {
     }
     const name = container.getAt(1) as Phaser.GameObjects.Text;
     name.setText(label);
+  }
+
+  private createAvatarAnimations(): void {
+    for (const avatar of AVATAR_OPTIONS) {
+      const config = avatar.sprite;
+      if (!config) continue;
+      for (const [state, action, frameRate] of [
+        ["idle", config.idleAction, config.idleFps],
+        ["walk", config.moveAction, config.moveFps],
+      ] as const) {
+        const textureKey = `${avatar.id}-${action}`;
+        const texture = this.textures.get(textureKey);
+        if (config.pixelArt) texture.setFilter(Phaser.Textures.FilterMode.NEAREST);
+        const framePrefix = `${config.slug}-${action}-`;
+        const frames = texture.getFrameNames()
+          .filter((frame) => frame.startsWith(framePrefix))
+          .sort((first, second) => first.localeCompare(second, undefined, { numeric: true }))
+          .map((frame) => ({ key: textureKey, frame }));
+        if (frames.length > 0) {
+          this.anims.create({ key: `${avatar.id}-${state}`, frames, frameRate, repeat: -1 });
+        }
+      }
+    }
+  }
+
+  private setAvatarAnimation(container: Phaser.GameObjects.Container, moving: boolean, directionX: number): void {
+    const avatar = getAvatarOption(String(container.getData("avatar") ?? ""));
+    const config = avatar?.sprite;
+    const sprite = container.getAt(0);
+    if (!config || !(sprite instanceof Phaser.GameObjects.Sprite)) return;
+
+    const state = moving ? "walk" : "idle";
+    const animationKey = `${avatar.id}-${state}`;
+    if (sprite.anims.currentAnim?.key !== animationKey) sprite.play(animationKey, true);
+    if (Math.abs(directionX) > 0.01) {
+      sprite.setFlipX((config.facing === "right" && directionX < 0) || (config.facing === "left" && directionX > 0));
+    }
   }
 
   private drawCity(): void {
