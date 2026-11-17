@@ -524,7 +524,7 @@ async function renderGame(root: HTMLElement, user: User): Promise<void> {
   function renderPoiList(search = poiSearch, list = poiList): void {
     const query = search.value.trim().toLowerCase();
     const results = [...cityFeatures]
-      .filter((feature) => feature.kind !== "water")
+      .filter((feature) => feature.kind === "building" || feature.kind === "poi")
       .filter((feature) => {
         const text = `${feature.name} ${feature.category}`.toLowerCase();
         return !query || text.includes(query);
