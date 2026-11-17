@@ -1,6 +1,7 @@
 import Phaser from "phaser";
 import { AVATAR_OPTIONS, OGA_AVATARS, getAvatarOption } from "../avatarCatalog";
 import { STATIC_AVATARS } from "../staticAvatarCatalog";
+import { POI_ICON_BY_CATEGORY, POI_ICON_NAMES } from "../poiIconCatalog";
 import { t } from "../i18n";
 
 export interface WorldLocation {
@@ -95,6 +96,7 @@ export class WorldScene extends Phaser.Scene {
   private satelliteRequestId = 0;
   private cityFeatures: WorldFeature[] = [];
   private featureLabels: Phaser.GameObjects.Text[] = [];
+  private poiIconObjects: Phaser.GameObjects.Image[] = [];
   private showFeatureNames = false;
   private buildingColliders: Array<{
     points: Array<[number, number]>;
@@ -122,6 +124,9 @@ export class WorldScene extends Phaser.Scene {
       if (avatar.image) {
         this.load.image(avatar.id, avatar.image);
       }
+    }
+    for (const iconName of POI_ICON_NAMES) {
+      this.load.svg(`poi-icon-${iconName}`, `/poi-icons/maki/${iconName}.svg`, { width: 15, height: 15 });
     }
     for (const avatar of AVATAR_OPTIONS) {
       if (!avatar.sprite) continue;
@@ -597,6 +602,10 @@ export class WorldScene extends Phaser.Scene {
       label.destroy();
     }
     this.featureLabels = [];
+    for (const icon of this.poiIconObjects) {
+      icon.destroy();
+    }
+    this.poiIconObjects = [];
 
     const renderOrder = { water: 0, building: 1, poi: 2 } as const;
     const features = [...this.cityFeatures].sort((first, second) => (
@@ -756,13 +765,21 @@ export class WorldScene extends Phaser.Scene {
   private drawPoi(feature: WorldFeature): void {
     const color = this.poiColor(feature.category);
     this.cityGraphics.fillStyle(0x17251d, 0.85);
-    this.cityGraphics.fillCircle(feature.x + 2, feature.y + 3, 11);
+    this.cityGraphics.fillCircle(feature.x + 2, feature.y + 3, 12);
     this.cityGraphics.fillStyle(color, 1);
-    this.cityGraphics.fillCircle(feature.x, feature.y, 8);
+    this.cityGraphics.fillCircle(feature.x, feature.y, 10);
     this.cityGraphics.lineStyle(2, 0xf3edcf, 1);
-    this.cityGraphics.strokeCircle(feature.x, feature.y, 8);
-    this.cityGraphics.fillStyle(0xf3edcf, 1);
-    this.cityGraphics.fillCircle(feature.x, feature.y, 2);
+    this.cityGraphics.strokeCircle(feature.x, feature.y, 10);
+
+    const iconName = POI_ICON_BY_CATEGORY[feature.category];
+    const iconKey = iconName ? `poi-icon-${iconName}` : "";
+    if (iconKey && this.textures.exists(iconKey)) {
+      const icon = this.add.image(feature.x, feature.y, iconKey).setDisplaySize(14, 14).setDepth(1);
+      this.poiIconObjects.push(icon);
+    } else {
+      this.cityGraphics.fillStyle(0xf3edcf, 1);
+      this.cityGraphics.fillCircle(feature.x, feature.y, 2);
+    }
   }
 
   private selectFeatureAtWorldPoint(x: number, y: number): void {
@@ -934,9 +951,13 @@ export class WorldScene extends Phaser.Scene {
   }
 
   private poiColor(category: string): number {
-    if (["museum", "place_of_worship", "theatre", "historic"].includes(category)) return 0xe2b875;
-    if (["cafe", "restaurant", "bar", "pub"].includes(category)) return 0xed9b75;
-    if (["shop", "market", "supermarket"].includes(category)) return 0x85c2b0;
+    if (["arts_centre", "cinema", "museum", "place_of_worship", "theatre", "archaeological_site", "castle", "fort", "memorial", "monument", "ruins", "wayside_cross"].includes(category)) return 0xe2b875;
+    if (["bar", "cafe", "fast_food", "pub", "restaurant", "bakery", "butcher"].includes(category)) return 0xed9b75;
+    if (["books", "clothes", "convenience", "department_store", "gift", "mall", "marketplace", "shop", "supermarket"].includes(category)) return 0x85c2b0;
+    if (["attraction", "gallery", "guest_house", "hostel", "hotel", "viewpoint", "zoo"].includes(category)) return 0x9bb9e0;
+    if (["garden", "park", "playground", "sports_centre", "stadium"].includes(category)) return 0x8abf84;
+    if (["cave_entrance", "fountain", "peak", "spring", "waterfall"].includes(category)) return 0x75bdd2;
+    if (["clinic", "community_centre", "dentist", "doctors", "hospital", "library", "pharmacy", "police", "post_office", "school", "university"].includes(category)) return 0xc1a8da;
     return 0xa8c99a;
   }
 
