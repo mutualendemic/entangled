@@ -116,7 +116,7 @@ export class WorldScene extends Phaser.Scene {
   private cityFeatures: WorldFeature[] = [];
   private featureLabels: Phaser.GameObjects.Text[] = [];
   private poiIconObjects: Phaser.GameObjects.Image[] = [];
-  private showFeatureNames = false;
+  private showFeatureNames = true;
   private buildingColliders: Array<{
     points: Array<[number, number]>;
     minX: number;

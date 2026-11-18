@@ -320,7 +320,7 @@ async function renderGame(root: HTMLElement, user: User): Promise<void> {
               <button id="zoom-5km" class="zoom-button zoom-reset-button" type="button" aria-label="${t("Enquadrar tile de 5 km")}" title="${t("Mostrar o tile completo de 5 km")}">5 km</button>
               <button id="toggle-satellite" class="zoom-button satellite-map-button" type="button" aria-label="${t("Ativar imagem de satelite")}" aria-pressed="false" title="${t("Ativar imagem de satelite")}" ${event.center ? "" : "disabled"}>Sat</button>
               <button id="fullscreen-map" class="zoom-button fullscreen-map-button" type="button" aria-label="${t("Abrir mapa em tela cheia")}" title="${t("Abrir mapa em tela cheia")}">⛶</button>
-              <button id="toggle-map-names" class="zoom-button map-names-button" type="button" aria-label="${t("Mostrar nomes no mapa")}" aria-pressed="false" title="${t("Mostrar nomes no mapa quando o zoom estiver aproximado")}">Aa</button>
+              <button id="toggle-map-names" class="zoom-button map-names-button" type="button" aria-label="${t("Ocultar nomes no mapa")}" aria-pressed="true" title="${t("Nomes ativos; visíveis quando o zoom estiver aproximado")}">Aa</button>
               <button id="toggle-map-destinations" class="zoom-button map-destinations-button" type="button" aria-label="${t("Mostrar destinos")}" aria-expanded="false" title="${t("Buscar e teleportar para um local")}">POI</button>
               <button id="recenter-map" class="zoom-button recenter-map-button" type="button" aria-label="${t("Voltar ao jogador")}" title="${t("Centralizar no jogador")}" hidden>◎</button>
             </div>
