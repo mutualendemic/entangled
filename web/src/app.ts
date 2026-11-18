@@ -353,7 +353,6 @@ async function renderGame(root: HTMLElement, user: User): Promise<void> {
                 <span class="sr-only">${t("Buscar destino")}</span>
                 <input id="poi-search" type="search" placeholder="${t("Buscar lugar ou POI")}" autocomplete="off" />
               </label>
-              <button id="teleport-gps" class="secondary-button teleport-button" type="button">${t("Usar GPS atual")}</button>
               <div id="poi-list" class="poi-list" aria-live="polite"></div>
             </div>
           </section>
@@ -440,7 +439,6 @@ async function renderGame(root: HTMLElement, user: User): Promise<void> {
   const satelliteMapButton = root.querySelector<HTMLButtonElement>("#toggle-satellite")!;
   const mapCredit = root.querySelector<HTMLElement>("#map-credit")!;
   const worldFrame = root.querySelector<HTMLElement>(".world-frame")!;
-  const teleportGpsButton = root.querySelector<HTMLButtonElement>("#teleport-gps")!;
   const mapFeatureCard = root.querySelector<HTMLElement>("#map-feature-card")!;
   const mapFeatureKind = root.querySelector<HTMLElement>("#map-feature-kind")!;
   const mapFeatureName = root.querySelector<HTMLElement>("#map-feature-name")!;
@@ -1011,38 +1009,6 @@ async function renderGame(root: HTMLElement, user: User): Promise<void> {
   movementStick.addEventListener("pointercancel", releaseMovement);
 
   poiSearch.addEventListener("input", () => renderPoiList());
-  teleportGpsButton.addEventListener("click", () => {
-    if (controlMode === "gps" && localGeo) {
-      const projected = scene?.setLocalGeoPosition(localGeo.lat, localGeo.lon);
-      if (projected) {
-        locationStatus.textContent = t("Teletransportado para o GPS atual");
-        drawPlayers();
-      }
-      return;
-    }
-    if (!navigator.geolocation || !window.isSecureContext) {
-      locationStatus.textContent = t("GPS nao disponivel para teleporte imediato.");
-      return;
-    }
-    teleportGpsButton.disabled = true;
-    locationStatus.textContent = t("Obtendo GPS para teleporte...");
-    navigator.geolocation.getCurrentPosition(({ coords }) => {
-      const projected = scene?.setLocalGeoPosition(coords.latitude, coords.longitude);
-      if (projected) {
-        if (controlMode === "gps") {
-          localGeo = { lat: coords.latitude, lon: coords.longitude, accuracy: coords.accuracy || 25, timestamp: Date.now() };
-          localSource = "gps";
-          localAccuracy = coords.accuracy || 25;
-        }
-        locationStatus.textContent = t("Teletransportado para o GPS atual");
-        drawPlayers();
-      }
-      teleportGpsButton.disabled = false;
-    }, () => {
-      locationStatus.textContent = t("Nao foi possivel obter a posicao GPS atual.");
-      teleportGpsButton.disabled = false;
-    }, { enableHighAccuracy: true, maximumAge: 30_000, timeout: 15_000 });
-  });
 
   drawPlayers();
   renderPoiList();
