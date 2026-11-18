@@ -269,13 +269,13 @@ async function renderGame(root: HTMLElement, user: User): Promise<void> {
     <main class="game-app">
       <header class="topbar">
         <a class="wordmark" href="#world"><span class="mini-mark" aria-hidden="true">∿</span> entanglement</a>
-        <div class="event-chip"><span class="live-dot"></span><span id="event-name">${escapeHtml(event.name)}</span><span class="event-id">${escapeHtml(eventId)}</span></div>
+        <div class="event-chip"><span class="live-dot"></span><span id="event-name">${escapeHtml(t(event.name))}</span><span class="event-id">${escapeHtml(eventId)}</span></div>
         <div class="account-actions">${languagePickerMarkup()}<span class="account-name">${escapeHtml(profile.display_name || user.username)}</span><button class="icon-button" type="button" data-action="logout" title="${t("Sair")}" aria-label="${t("Sair")}">↗</button></div>
       </header>
       <div class="game-layout">
         <section class="world-column">
           <div class="world-toolbar">
-            <div><p class="eyebrow">${t("MAPA DO EVENTO")}</p><h1>${escapeHtml(event.name)}</h1></div>
+            <div><p class="eyebrow">${t("MAPA DO EVENTO")}</p><h1>${escapeHtml(t(event.name))}</h1></div>
             <div class="world-coordinates" id="location-status">${t(event.center ? "Localizacao desligada" : "Centro do evento pendente")}</div>
           </div>
           <div class="world-frame">
