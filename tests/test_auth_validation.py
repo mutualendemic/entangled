@@ -44,7 +44,7 @@ def test_registration_rejects_invalid_username_without_database():
 
     response = client.post(
         "/api/auth/register",
-        json={"username": "x", "password": "long-enough-password", "avatar": "moss"},
+        json={"username": "x", "password": "long-enough-password", "avatar": "cat-black-sleek-sitting-elegant"},
     )
 
     assert response.status_code == 400
@@ -73,12 +73,24 @@ def test_registration_accepts_added_avatar(monkeypatch, avatar):
     assert inserted_users[0]["avatar"] == avatar
 
 
+def test_registration_rejects_avatar_without_a_sprite_asset():
+    client = create_app().test_client()
+
+    response = client.post(
+        "/api/auth/register",
+        json={"username": "player_1", "password": "long-enough-password", "avatar": "moss"},
+    )
+
+    assert response.status_code == 400
+    assert response.get_json() == {"error": "Avatar invalido"}
+
+
 def test_registration_rejects_short_password_without_database():
     client = create_app().test_client()
 
     response = client.post(
         "/api/auth/register",
-        json={"username": "player_1", "password": "short", "avatar": "moss"},
+        json={"username": "player_1", "password": "short", "avatar": "cat-black-sleek-sitting-elegant"},
     )
 
     assert response.status_code == 400
@@ -139,7 +151,7 @@ def test_registration_requires_jwt_secret_before_database(monkeypatch):
 
     response = client.post(
         "/api/auth/register",
-        json={"username": "player_1", "password": "long-enough-password", "avatar": "moss"},
+        json={"username": "player_1", "password": "long-enough-password", "avatar": "cat-black-sleek-sitting-elegant"},
     )
 
     assert response.status_code == 503
@@ -157,7 +169,7 @@ def test_registration_returns_service_unavailable_when_mongodb_dns_fails(monkeyp
 
     response = client.post(
         "/api/auth/register",
-        json={"username": "player_1", "password": "long-enough-password", "avatar": "moss"},
+        json={"username": "player_1", "password": "long-enough-password", "avatar": "cat-black-sleek-sitting-elegant"},
     )
 
     assert response.status_code == 503
@@ -183,7 +195,7 @@ def test_registration_explains_duplicate_username(monkeypatch):
 
     response = app.test_client().post(
         "/api/auth/register",
-        json={"username": "player_1", "password": "long-enough-password", "avatar": "moss"},
+        json={"username": "player_1", "password": "long-enough-password", "avatar": "cat-black-sleek-sitting-elegant"},
     )
 
     assert response.status_code == 409

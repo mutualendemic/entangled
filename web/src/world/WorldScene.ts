@@ -1,5 +1,5 @@
 import Phaser from "phaser";
-import { AVATAR_OPTIONS, OGA_AVATARS, getAvatarOption } from "../avatarCatalog";
+import { AVATAR_OPTIONS, DEFAULT_AVATAR_ID, OGA_AVATARS, getAvatarOption } from "../avatarCatalog";
 import { STATIC_AVATARS } from "../staticAvatarCatalog";
 import { POI_ICON_BY_CATEGORY, POI_ICON_NAMES } from "../poiIconCatalog";
 import { t } from "../i18n";
@@ -46,8 +46,8 @@ export interface RemotePlayer {
   source?: "gps" | "ble" | "local";
 }
 
-const PLAYER_SPEED = 120;
-const WORLD_CAMERA_ZOOM = 0.5;
+const PLAYER_SPEED = 160;
+const WORLD_CAMERA_ZOOM = 0.85;
 const TILE_SIZE_METERS = 5000;
 const MAX_WORLD_CAMERA_ZOOM = 1.8;
 const PLAYER_COLLISION_RADIUS = 11;
@@ -129,6 +129,7 @@ export class WorldScene extends Phaser.Scene {
   private centerPlayerOnZoom = false;
   private followPlayerEnabled = true;
   private compassRotationEnabled = false;
+  private cameraRotation = 0;
   private playerHeading = 0;
   private tileX = 0;
   private tileY = 0;
@@ -165,12 +166,12 @@ export class WorldScene extends Phaser.Scene {
     this.drawCity();
     this.drawWorldBoundary();
     this.drawLocations();
-    this.player = this.makePlayer(0x9de2b1, t("Voce"), "moss");
+    this.player = this.makePlayer(0x9de2b1, t("Voce"), DEFAULT_AVATAR_ID);
     this.playerX = this.world.width_m / 2;
     this.playerY = this.world.height_m / 2;
     this.player.setPosition(this.playerX, this.playerY);
     this.cameras.main.setBounds(0, 0, this.world.width_m, this.world.height_m);
-    this.cameras.main.startFollow(this.player, true, 0.1, 0.1);
+    this.cameras.main.startFollow(this.player, true, 0.2, 0.2);
     this.applyCameraRotation();
     this.setZoom(this.cameraZoom);
 
@@ -252,7 +253,7 @@ export class WorldScene extends Phaser.Scene {
     this.player.setPosition(this.playerX, this.playerY);
     this.cameras.main.setBounds(0, 0, this.world.width_m, this.world.height_m);
     this.cameraFollowingPlayer = true;
-    this.cameras.main.startFollow(this.player, true, 0.1, 0.1);
+    this.cameras.main.startFollow(this.player, true, 0.2, 0.2);
     this.setZoom(this.cameraZoom);
   }
 
@@ -271,7 +272,7 @@ export class WorldScene extends Phaser.Scene {
     this.playerY = Phaser.Math.Clamp(y, 8, this.world.height_m - 8);
     this.player.setPosition(this.playerX, this.playerY);
     this.cameraFollowingPlayer = true;
-    this.cameras.main.startFollow(this.player, true, 0.1, 0.1);
+    this.cameras.main.startFollow(this.player, true, 0.2, 0.2);
     this.cameras.main.centerOn(this.playerX, this.playerY);
     this.events.emit("camera-mode", true);
     if (this.satelliteEnabled) {
@@ -361,7 +362,7 @@ export class WorldScene extends Phaser.Scene {
     this.syncFeatureLabelVisibility();
     if (shouldCenterOnPlayer && this.player) {
       this.cameraFollowingPlayer = true;
-      camera.startFollow(this.player, true, 0.1, 0.1);
+      camera.startFollow(this.player, true, 0.2, 0.2);
       camera.centerOn(this.playerX, this.playerY);
       this.events.emit("camera-mode", true);
     } else if (this.cameraZoom <= minZoom + 0.001) {
@@ -371,7 +372,7 @@ export class WorldScene extends Phaser.Scene {
       this.events.emit("camera-mode", false);
     } else if (this.followPlayerEnabled && (wasFollowingPlayer || this.centerPlayerOnZoom) && this.player) {
       this.cameraFollowingPlayer = true;
-      camera.startFollow(this.player, true, 0.1, 0.1);
+      camera.startFollow(this.player, true, 0.2, 0.2);
       camera.centerOn(this.playerX, this.playerY);
       this.events.emit("camera-mode", true);
     } else {
@@ -383,11 +384,38 @@ export class WorldScene extends Phaser.Scene {
     this.applyCameraRotation();
   }
 
+  setZoomAt(zoom: number, screenX: number, screenY: number): void {
+    const camera = this.cameras.main;
+    const fitZoom = Math.min(camera.width / this.world.width_m, camera.height / this.world.height_m);
+    const minZoom = Math.max(0.01, Math.min(WORLD_CAMERA_ZOOM, fitZoom * 0.94));
+    const nextZoom = Phaser.Math.Clamp(zoom, minZoom, MAX_WORLD_CAMERA_ZOOM);
+    const offsetX = screenX - camera.x - camera.width / 2;
+    const offsetY = screenY - camera.y - camera.height / 2;
+    const cos = Math.cos(this.cameraRotation);
+    const sin = Math.sin(this.cameraRotation);
+    const rotatedOffsetX = cos * offsetX + sin * offsetY;
+    const rotatedOffsetY = -sin * offsetX + cos * offsetY;
+    const worldAnchorX = camera.scrollX + camera.width / 2 + rotatedOffsetX / this.cameraZoom;
+    const worldAnchorY = camera.scrollY + camera.height / 2 + rotatedOffsetY / this.cameraZoom;
+
+    this.cameraZoom = nextZoom;
+    camera.stopFollow();
+    this.cameraFollowingPlayer = false;
+    camera.setZoom(nextZoom);
+    camera.setScroll(
+      worldAnchorX - camera.width / 2 - rotatedOffsetX / nextZoom,
+      worldAnchorY - camera.height / 2 - rotatedOffsetY / nextZoom,
+    );
+    this.drawWorldBoundary();
+    this.syncFeatureLabelVisibility();
+    this.events.emit("camera-mode", false);
+  }
+
   setCenterPlayerOnZoom(enabled: boolean): void {
     this.centerPlayerOnZoom = enabled;
     if (enabled && this.player) {
       this.cameraFollowingPlayer = true;
-      this.cameras.main.startFollow(this.player, true, 0.1, 0.1);
+      this.cameras.main.startFollow(this.player, true, 0.2, 0.2);
       this.cameras.main.centerOn(this.playerX, this.playerY);
       this.events.emit("camera-mode", true);
     }
@@ -403,7 +431,7 @@ export class WorldScene extends Phaser.Scene {
     }
     if (this.player) {
       this.cameraFollowingPlayer = true;
-      this.cameras.main.startFollow(this.player, true, 0.1, 0.1);
+      this.cameras.main.startFollow(this.player, true, 0.2, 0.2);
       this.cameras.main.centerOn(this.playerX, this.playerY);
       this.events.emit("camera-mode", true);
     }
@@ -421,7 +449,8 @@ export class WorldScene extends Phaser.Scene {
 
   private applyCameraRotation(): void {
     const camera = this.cameras.main;
-    camera.setRotation(this.compassRotationEnabled ? -Phaser.Math.DegToRad(this.playerHeading) : 0);
+    this.cameraRotation = this.compassRotationEnabled ? -Phaser.Math.DegToRad(this.playerHeading) : 0;
+    camera.setRotation(this.cameraRotation);
   }
 
   panCameraBy(screenDeltaX: number, screenDeltaY: number): void {
@@ -443,7 +472,7 @@ export class WorldScene extends Phaser.Scene {
       this.setZoom(Math.max(WORLD_CAMERA_ZOOM, minZoom + 0.1));
     }
     this.cameraFollowingPlayer = true;
-    camera.startFollow(this.player, true, 0.1, 0.1);
+    camera.startFollow(this.player, true, 0.2, 0.2);
     camera.centerOn(this.playerX, this.playerY);
     this.events.emit("camera-mode", true);
   }
@@ -542,13 +571,13 @@ export class WorldScene extends Phaser.Scene {
     const option = getAvatarOption(avatar);
     if (option?.sprite) {
       const { slug, idleAction } = option.sprite;
-      const sprite = this.add.sprite(0, 0, `${avatar}-${idleAction}`, `${slug}-${idleAction}-00`);
+      const sprite = this.add.sprite(0, 0, `${option.id}-${idleAction}`, `${slug}-${idleAction}-00`);
       sprite.setScale(0.14).setOrigin(0.5, 0.875).setDepth(1);
-      sprite.play(`${avatar}-idle`);
+      sprite.play(`${option.id}-idle`);
       return sprite;
     }
-    if (option?.image && this.textures.exists(avatar)) {
-      const sprite = this.add.image(0, 0, avatar);
+    if (option?.image && this.textures.exists(option.id)) {
+      const sprite = this.add.image(0, 0, option.id);
       const frame = sprite.frame;
       const scale = 28 / Math.max(frame.width, frame.height);
       sprite.setScale(scale).setOrigin(0.5).setDepth(1);

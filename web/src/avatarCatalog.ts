@@ -18,16 +18,6 @@ export interface AvatarOption {
   };
 }
 
-export const BUILTIN_AVATARS: AvatarOption[] = [
-  { id: "moss", name: "Musgo" },
-  { id: "ember", name: "Brasa" },
-  { id: "wave", name: "Onda" },
-  { id: "sun", name: "Sol" },
-  { id: "comet", name: "Cometa" },
-  { id: "bloom", name: "Flor" },
-  { id: "girl8", name: "Girl 8" },
-];
-
 export const OGA_AVATARS: AvatarOption[] = [
   { id: "oga-01", name: "Base character", author: "pondomaniac", image: "/avatars/oga/oga-01.png", source: "https://opengameart.org/content/base-character", license: "CC0 1.0" },
   { id: "oga-02", name: "Hero", author: "pondomaniac", image: "/avatars/oga/oga-02.png", source: "https://opengameart.org/content/hero-0", license: "CC0 1.0" },
@@ -78,8 +68,11 @@ const SPRITECANVAS_AVATARS: AvatarOption[] = [
   { id: "pixel-slime-king", name: "Pixel Crystal Slime", license: "CC0 1.0", sprite: { slug: "pixel-slime-king", idleAction: "idle", moveAction: "bounce", facing: "left", pixelArt: true, idleFps: 8, moveFps: 10 } },
 ];
 
-export const AVATAR_OPTIONS: AvatarOption[] = [...BUILTIN_AVATARS, ...STATIC_AVATARS, ...SPRITECANVAS_AVATARS];
+export const DEFAULT_AVATAR_ID = STATIC_AVATARS[0].id;
+export const AVATAR_OPTIONS: AvatarOption[] = [...STATIC_AVATARS, ...SPRITECANVAS_AVATARS];
 
-export function getAvatarOption(id: string): AvatarOption | undefined {
-  return AVATAR_OPTIONS.find((avatar) => avatar.id === id) ?? OGA_AVATARS.find((avatar) => avatar.id === id);
+export function getAvatarOption(id: string): AvatarOption {
+  return AVATAR_OPTIONS.find((avatar) => avatar.id === id)
+    ?? OGA_AVATARS.find((avatar) => avatar.id === id)
+    ?? AVATAR_OPTIONS[0];
 }

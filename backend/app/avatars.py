@@ -73,4 +73,5 @@ SPRITECANVAS_AVATARS = {
     "forest-archer",
     "pixel-slime-king",
 }
-AVATARS = {"moss", "ember", "wave", "sun", "comet", "bloom", "girl8"} | OGA_AVATARS | STATIC_CHARACTER_AVATARS | SPRITECANVAS_AVATARS
+DEFAULT_AVATAR = "cat-black-sleek-sitting-elegant"
+AVATARS = OGA_AVATARS | STATIC_CHARACTER_AVATARS | SPRITECANVAS_AVATARS

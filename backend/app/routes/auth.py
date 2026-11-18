@@ -7,7 +7,7 @@ from flask import Blueprint, current_app, g, jsonify, request
 from pymongo.errors import DuplicateKeyError
 
 from backend.app.database import get_database
-from backend.app.avatars import AVATARS
+from backend.app.avatars import AVATARS, DEFAULT_AVATAR
 from backend.app.email_service import send_action_email
 from backend.app.security import (
     create_access_token,
@@ -49,7 +49,7 @@ def register():
     body = _json_body()
     username = str(body.get("username", "")).strip()
     password = body.get("password", "")
-    avatar = body.get("avatar", "moss")
+    avatar = body.get("avatar", DEFAULT_AVATAR)
 
     if not USERNAME_PATTERN.fullmatch(username):
         return jsonify({"error": "Use de 3 a 24 letras, numeros ou underscores no nome"}), 400

@@ -1,5 +1,5 @@
 import Phaser from "phaser";
-import { AVATAR_OPTIONS, getAvatarOption } from "./avatarCatalog";
+import { AVATAR_OPTIONS, DEFAULT_AVATAR_ID, getAvatarOption } from "./avatarCatalog";
 import { apiRequest, getToken, setToken, type Profile, type User } from "./services/api";
 import { startBeaconScan } from "./services/bluetooth";
 import { distanceBetween, stopWatchingLocation, watchLocation, type GeoPosition } from "./services/location";
@@ -101,7 +101,7 @@ export async function mountApp(root: HTMLElement): Promise<void> {
 
 function renderAuth(root: HTMLElement, initialNotice = ""): void {
   let mode: AuthMode = "login";
-  let selectedAvatar = "moss";
+  let selectedAvatar = DEFAULT_AVATAR_ID;
 
   const draw = (notice = initialNotice): void => {
     root.innerHTML = `
@@ -150,7 +150,7 @@ function renderAuth(root: HTMLElement, initialNotice = ""): void {
     });
     root.querySelectorAll<HTMLButtonElement>("[data-avatar]").forEach((button) => {
       button.addEventListener("click", () => {
-        selectedAvatar = button.dataset.avatar ?? "moss";
+        selectedAvatar = button.dataset.avatar ?? DEFAULT_AVATAR_ID;
         draw("");
       });
     });
@@ -368,7 +368,7 @@ async function renderGame(root: HTMLElement, user: User): Promise<void> {
               <label>${t("Nome publico")}<input name="display_name" maxlength="40" value="${escapeHtml(profile.display_name)}" required /></label>
               <label>${t("Sobre voce")}<textarea name="bio" maxlength="280" rows="3">${escapeHtml(profile.bio)}</textarea></label>
               <label>${t("Interesses, separados por virgula")}<input name="interests" maxlength="320" value="${escapeHtml(profile.interests.join(", "))}" /></label>
-              <input id="profile-avatar" name="avatar" type="hidden" value="${escapeHtml(profile.avatar)}" />
+              <input id="profile-avatar" name="avatar" type="hidden" value="${escapeHtml(getAvatarOption(profile.avatar).id)}" />
               <fieldset class="avatar-picker profile-avatar-picker"><legend>${t("Avatar")}</legend><div class="avatar-options">${renderAvatarOptions(profile.avatar, true)}</div></fieldset>
               <button class="primary-button" type="submit">${t("Salvar perfil")}</button>
               <p class="notice" id="profile-notice" role="status"></p>
@@ -879,6 +879,13 @@ async function renderGame(root: HTMLElement, user: User): Promise<void> {
   let pinchGesture: { pointerIds: [number, number]; startDistance: number; startZoom: number } | null = null;
   const pointerDistance = (first: { x: number; y: number }, second: { x: number; y: number }): number =>
     Math.hypot(first.x - second.x, first.y - second.y);
+  const mapPointFromClient = (clientX: number, clientY: number): { x: number; y: number } => {
+    const bounds = game.canvas.getBoundingClientRect();
+    return {
+      x: (clientX - bounds.left) * (scene?.scale.width ?? bounds.width) / bounds.width,
+      y: (clientY - bounds.top) * (scene?.scale.height ?? bounds.height) / bounds.height,
+    };
+  };
 
   worldFrame.addEventListener("pointerdown", (event) => {
     if (event.button !== 0 || !(event.target instanceof Element)) return;
@@ -919,7 +926,8 @@ async function renderGame(root: HTMLElement, user: User): Promise<void> {
       const second = activeMapPointers.get(pinchGesture.pointerIds[1]);
       if (first && second) {
         const distance = pointerDistance(first, second);
-        scene?.setZoom(pinchGesture.startZoom * distance / pinchGesture.startDistance);
+        const midpoint = mapPointFromClient((first.x + second.x) / 2, (first.y + second.y) / 2);
+        scene?.setZoomAt(pinchGesture.startZoom * distance / pinchGesture.startDistance, midpoint.x, midpoint.y);
         event.preventDefault();
       }
       return;
@@ -1249,6 +1257,7 @@ function appendMessage(container: HTMLElement, message: ChatMessage, mine: boole
 }
 
 function renderAvatarOptions(selected: string, profile = false): string {
+  const selectedAvatar = getAvatarOption(selected).id;
   return AVATAR_OPTIONS.map((avatar) => {
     const dataAttribute = profile ? "data-profile-avatar" : "data-avatar";
     const visual = avatar.sprite
@@ -1257,7 +1266,7 @@ function renderAvatarOptions(selected: string, profile = false): string {
         ? `<img src="${avatar.image}" alt="" loading="lazy" />`
         : `<span class="avatar-option-glyph">${avatarGlyph(avatar.id)}</span>`;
     const translatedName = escapeHtml(t(avatar.name));
-    return `<button type="button" class="avatar-option ${avatar.id === selected ? "selected" : ""}" ${dataAttribute}="${avatar.id}" aria-label="${translatedName}" title="${translatedName}">${visual}<span class="avatar-option-name">${translatedName}</span></button>`;
+    return `<button type="button" class="avatar-option ${avatar.id === selectedAvatar ? "selected" : ""}" ${dataAttribute}="${avatar.id}" aria-label="${translatedName}" title="${translatedName}">${visual}<span class="avatar-option-name">${translatedName}</span></button>`;
   }).join("");
 }
 
