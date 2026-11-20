@@ -122,6 +122,7 @@ const englishTranslations: Record<string, string> = {
   "Dados © OpenStreetMap contributors": "Data © OpenStreetMap contributors",
   "Imagem © Esri, Maxar, Earthstar Geographics | Dados © OpenStreetMap": "Imagery © Esri, Maxar, Earthstar Geographics | Data © OpenStreetMap",
   "Ainda nao ha logs de Realtime para descarregar.": "There are no Realtime logs to download yet.",
+  "Ainda nao ha dados de diagnóstico para descarregar.": "There is no diagnostic data to download yet.",
   "Falha ao enviar {event} ({result}). Verifique a policy Realtime.": "Failed to send {event} ({result}). Check the Realtime policy.",
   "Conectado ao tile {x}, {y}": "Connected to tile {x}, {y}",
   "Falha ao publicar presença: {result}": "Failed to publish presence: {result}",

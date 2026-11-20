@@ -3,7 +3,9 @@ import { AVATAR_OPTIONS, DEFAULT_AVATAR_ID, getAvatarOption, type AvatarOption }
 import { apiRequest, getToken, setToken, type Profile, type User } from "./services/api";
 import { startBeaconScan } from "./services/bluetooth";
 import { distanceBetween, stopWatchingLocation, watchLocation, type GeoPosition } from "./services/location";
-import { downloadRealtimeDebugLog, RealtimeSession, type ChatMessage } from "./services/realtime";
+import { RealtimeSession, type ChatMessage } from "./services/realtime";
+import { downloadClientDiagnostics } from "./services/diagnostics";
+import { beginPageLoad } from "./services/loading";
 import { getLocale, languagePickerMarkup, LOCALE_RESUME_KEY, playersOnline, setLocale, t, type Locale } from "./i18n";
 import { WorldScene, type RemotePlayer, type WorldData, type WorldFeature } from "./world/WorldScene";
 
@@ -384,6 +386,7 @@ async function renderGame(root: HTMLElement, user: User): Promise<void> {
       </div>
     </main>`;
 
+  const finishWorldLoading = beginPageLoad();
   const game = new Phaser.Game({
     type: Phaser.AUTO,
     parent: "world-canvas",
@@ -396,6 +399,7 @@ async function renderGame(root: HTMLElement, user: User): Promise<void> {
   let localPositionStale = false;
   let localGeo: GeoPosition | null = null;
   let geoWatch = -1;
+  let finishGpsLoading: (() => void) | null = null;
   let stopBleScan: (() => void) | null = null;
   let localSource: "gps" | "ble" | "local" = "local";
   let localAccuracy = 0;
@@ -425,8 +429,8 @@ async function renderGame(root: HTMLElement, user: User): Promise<void> {
   const status = root.querySelector<HTMLElement>("#connection-status")!;
   const positionHealth = root.querySelector<HTMLElement>("#position-health")!;
   root.querySelector<HTMLButtonElement>("#download-realtime-debug")?.addEventListener("click", () => {
-    if (!downloadRealtimeDebugLog()) {
-      status.textContent = t("Ainda nao ha logs de Realtime para descarregar.");
+    if (!downloadClientDiagnostics()) {
+      status.textContent = t("Ainda nao ha dados de diagnóstico para descarregar.");
     }
   });
   const locationStatus = root.querySelector<HTMLElement>("#location-status")!;
@@ -730,6 +734,7 @@ async function renderGame(root: HTMLElement, user: User): Promise<void> {
   game.events.once(Phaser.Core.Events.READY, () => {
     const worldScene = game.scene.getScene("world") as WorldScene;
     worldScene.events.once(Phaser.Scenes.Events.CREATE, () => {
+      finishWorldLoading();
       scene = worldScene;
       worldScene.setWorld(event);
       if (resumeState) worldScene.setLocalMapPosition(resumeState.x, resumeState.y);
@@ -776,7 +781,9 @@ async function renderGame(root: HTMLElement, user: User): Promise<void> {
     }
     initializeWorldButton.disabled = true;
     centerNotice.textContent = t("Obtendo localizacao para configurar o evento...");
+    const finishCenterGpsLoading = beginPageLoad();
     navigator.geolocation.getCurrentPosition(async ({ coords }) => {
+      finishCenterGpsLoading();
       try {
         const result = await apiRequest<{ center: { lat: number; lon: number } }>("/world/center", {
           method: "POST",
@@ -797,6 +804,7 @@ async function renderGame(root: HTMLElement, user: User): Promise<void> {
         initializeWorldButton.disabled = false;
       }
     }, (error) => {
+      finishCenterGpsLoading();
       centerNotice.textContent = t(error.code === error.PERMISSION_DENIED
         ? "Permita a localizacao para definir o centro do evento."
         : "Nao foi possivel obter a localizacao GPS.");
@@ -1057,6 +1065,8 @@ async function renderGame(root: HTMLElement, user: User): Promise<void> {
     updateControlModeUi(mode);
     stopWatchingLocation(geoWatch);
     geoWatch = -1;
+    finishGpsLoading?.();
+    finishGpsLoading = null;
     stopBleScan?.();
     stopBleScan = null;
     localGeo = null;
@@ -1083,8 +1093,11 @@ async function renderGame(root: HTMLElement, user: User): Promise<void> {
         return;
       }
       controlModeStatus.textContent = t("GPS ativo; sua posicao e precisao sao compartilhadas no tile atual.");
+      finishGpsLoading = beginPageLoad();
       geoWatch = watchLocation((position) => {
         if (controlMode !== "gps" || requestId !== controlModeRequestId) return;
+        finishGpsLoading?.();
+        finishGpsLoading = null;
         localGeo = position;
         localAccuracy = position.accuracy;
         localSource = "gps";

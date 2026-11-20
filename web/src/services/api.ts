@@ -1,3 +1,5 @@
+import { beginPageLoad } from "./loading";
+
 export interface User {
   id: string;
   username: string;
@@ -40,15 +42,20 @@ export async function apiRequest<T>(path: string, options: {
     headers.set("Authorization", `Bearer ${token}`);
   }
 
-  const response = await fetch(`${API_BASE}${path}`, {
-    method: options.method ?? "GET",
-    headers,
-    body: options.body === undefined ? undefined : JSON.stringify(options.body),
-    cache: options.cache,
-  });
-  const result = await response.json().catch(() => ({}));
-  if (!response.ok) {
-    throw new Error(result.error ?? "Nao foi possivel concluir a solicitacao");
+  const finishLoading = beginPageLoad();
+  try {
+    const response = await fetch(`${API_BASE}${path}`, {
+      method: options.method ?? "GET",
+      headers,
+      body: options.body === undefined ? undefined : JSON.stringify(options.body),
+      cache: options.cache,
+    });
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      throw new Error(result.error ?? "Nao foi possivel concluir a solicitacao");
+    }
+    return result as T;
+  } finally {
+    finishLoading();
   }
-  return result as T;
 }

@@ -36,7 +36,7 @@ Email must never appear in the public profile endpoint. Without an associated em
 
 ## Positioning and distance
 
-- The player chooses one exclusive mode: joystick/manual, continuous GPS, or BLE. In manual mode, stop the GPS watcher and BLE scanner; the joystick moves at 80 world units per second, and position broadcasts continue while stationary so peers can detect stale updates. A one-time GPS teleport must not reactivate continuous updates.
+- The player chooses one exclusive mode: joystick/manual, continuous GPS, or BLE. In manual mode, stop the GPS watcher and BLE scanner; the joystick moves at 80 world units per second using visible wall-clock frame time (bounded to avoid jumps after long stalls), rather than Phaser's smoothed frame delta. Position broadcasts continue while stationary so peers can detect stale updates. A one-time GPS teleport must not reactivate continuous updates.
 - The avatar can be changed in Profile; the endpoint validates the allowed ID, saves the selection, and issues an updated token for the Realtime identity.
 - The user can drag the map to explore the cell without moving the avatar and return the camera to the player with a dedicated control. Clicking a POI opens its name, type, and category; search and teleport are also available in a panel over the map.
 - Zoom controls include an action to frame the full 5 km tile and another to open the Phaser viewport in fullscreen; the tile boundary is outlined in yellow, and exiting fullscreen restores the normal layout.

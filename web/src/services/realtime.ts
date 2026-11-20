@@ -3,6 +3,7 @@ import { apiRequest, type User } from "./api";
 import { t } from "../i18n";
 import type { GeoPosition } from "./location";
 import type { RemotePlayer } from "../world/WorldScene";
+import { recordRealtimeDiagnostic } from "./diagnostics";
 
 export interface ChatMessage {
   id: string;
@@ -27,30 +28,6 @@ interface PositionPayload extends RemotePlayer {
 const POSITION_STALE_AFTER_MS = 3_000;
 const SUPABASE_URL = import.meta.env.SUPABASE_URL ?? "";
 const SUPABASE_KEY = import.meta.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ?? "";
-const REALTIME_DEBUG_STORAGE_KEY = "entanglement.realtime.debug";
-
-export function downloadRealtimeDebugLog(): boolean {
-  try {
-    const entries = JSON.parse(sessionStorage.getItem(REALTIME_DEBUG_STORAGE_KEY) ?? "[]");
-    if (!Array.isArray(entries) || entries.length === 0) {
-      return false;
-    }
-    const download = new Blob([JSON.stringify(entries, null, 2)], { type: "application/json" });
-    const url = URL.createObjectURL(download);
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = "entanglement-realtime-debug.json";
-    link.style.display = "none";
-    document.body.appendChild(link);
-    link.click();
-    link.remove();
-    window.setTimeout(() => URL.revokeObjectURL(url), 0);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 export class RealtimeSession {
   private client: SupabaseClient | null = null;
   private channel: RealtimeChannel | null = null;
@@ -71,6 +48,15 @@ export class RealtimeSession {
   private tileX = 0;
   private tileY = 0;
   private broadcastFailed = false;
+  private positionMetricsWindowStartedAt = 0;
+  private positionBroadcastsAttempted = 0;
+  private positionBroadcastFailures = 0;
+  private positionBroadcastsWithoutChannel = 0;
+  private positionSendLatencyTotalMs = 0;
+  private positionSendLatencyMaxMs = 0;
+  private receivedPositionUpdates = 0;
+  private lastPositionReceivedAt = 0;
+  private maxInboundPositionIntervalMs = 0;
 
   constructor(
     private readonly user: User,
@@ -93,6 +79,7 @@ export class RealtimeSession {
     });
     this.tileX = tileX;
     this.tileY = tileY;
+    this.positionMetricsWindowStartedAt = performance.now();
     document.addEventListener("visibilitychange", this.refreshOnVisibility);
     window.addEventListener("online", this.refreshOnOnline);
     this.refreshTimer = window.setInterval(() => {
@@ -110,15 +97,31 @@ export class RealtimeSession {
   async sendPosition(position: Omit<PositionPayload, "sentAt" | "receivedAt">, geo?: GeoPosition): Promise<void> {
     const channel = this.channel;
     if (!channel) {
+      this.positionBroadcastsWithoutChannel += 1;
       return;
     }
+    const sendStartedAt = performance.now();
     const payload: PositionPayload = {
       ...position,
       ...(geo ? { lat: geo.lat, lon: geo.lon, accuracy: geo.accuracy } : {}),
       sentAt: Date.now(),
     };
     this.positions.set(this.user.id, payload);
-    const result = await channel.send({ type: "broadcast", event: "position", payload });
+    let result: string;
+    try {
+      result = await channel.send({ type: "broadcast", event: "position", payload });
+    } catch (error) {
+      result = "exception";
+      this.logRealtimeDebug({
+        event: "position_broadcast_exception",
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+    const sendDuration = performance.now() - sendStartedAt;
+    this.positionBroadcastsAttempted += 1;
+    this.positionSendLatencyTotalMs += sendDuration;
+    this.positionSendLatencyMaxMs = Math.max(this.positionSendLatencyMaxMs, sendDuration);
+    if (result !== "ok") this.positionBroadcastFailures += 1;
     if (this.channel === channel && result === "ok") {
       this.lastPositionAckAt = Date.now();
       this.setSelfPositionStale(false);
@@ -183,14 +186,7 @@ export class RealtimeSession {
   }
 
   private logRealtimeDebug(context: Record<string, unknown>): void {
-    try {
-      const previous = JSON.parse(sessionStorage.getItem(REALTIME_DEBUG_STORAGE_KEY) ?? "[]") as Array<Record<string, unknown>>;
-      const entry = { ts: new Date().toISOString(), ...context };
-      const next = [...previous.slice(-19), entry];
-      sessionStorage.setItem(REALTIME_DEBUG_STORAGE_KEY, JSON.stringify(next));
-    } catch {
-      // ignore storage issues; keep logs only in console
-    }
+    recordRealtimeDiagnostic(context);
     console.warn("Realtime debug:", context);
   }
 
@@ -218,6 +214,7 @@ export class RealtimeSession {
 
   private checkPositionHealth(): void {
     if (!this.client) return;
+    this.flushPositionDiagnostics();
     const selfStale = !this.channel
       || !this.lastPositionAckAt
       || Date.now() - this.lastPositionAckAt >= POSITION_STALE_AFTER_MS;
@@ -491,6 +488,38 @@ export class RealtimeSession {
     });
   }
 
+  private flushPositionDiagnostics(): void {
+    const now = performance.now();
+    const durationMs = now - this.positionMetricsWindowStartedAt;
+    if (durationMs < 5_000) return;
+
+    recordRealtimeDiagnostic({
+      event: "position_transport_sample",
+      durationMs: Math.round(durationMs),
+      tileX: this.tileX,
+      tileY: this.tileY,
+      channelState: this.client?.realtime.connectionState() ?? "missing",
+      broadcastsAttempted: this.positionBroadcastsAttempted,
+      broadcastsWithoutChannel: this.positionBroadcastsWithoutChannel,
+      broadcastFailures: this.positionBroadcastFailures,
+      averageBroadcastAckMs: this.positionBroadcastsAttempted
+        ? Math.round(this.positionSendLatencyTotalMs / this.positionBroadcastsAttempted)
+        : null,
+      maxBroadcastAckMs: Math.round(this.positionSendLatencyMaxMs),
+      receivedPositionUpdates: this.receivedPositionUpdates,
+      maxInboundPositionIntervalMs: Math.round(this.maxInboundPositionIntervalMs),
+    });
+
+    this.positionMetricsWindowStartedAt = now;
+    this.positionBroadcastsAttempted = 0;
+    this.positionBroadcastFailures = 0;
+    this.positionBroadcastsWithoutChannel = 0;
+    this.positionSendLatencyTotalMs = 0;
+    this.positionSendLatencyMaxMs = 0;
+    this.receivedPositionUpdates = 0;
+    this.maxInboundPositionIntervalMs = 0;
+  }
+
   private receivePosition(payload: PositionPayload): void {
     if (!payload || payload.id === this.user.id || typeof payload.x !== "number" || typeof payload.y !== "number") {
       return;
@@ -498,6 +527,15 @@ export class RealtimeSession {
     if (Date.now() - payload.sentAt > 15_000) {
       return;
     }
+    const receivedAt = performance.now();
+    if (this.lastPositionReceivedAt > 0) {
+      this.maxInboundPositionIntervalMs = Math.max(
+        this.maxInboundPositionIntervalMs,
+        receivedAt - this.lastPositionReceivedAt,
+      );
+    }
+    this.lastPositionReceivedAt = receivedAt;
+    this.receivedPositionUpdates += 1;
     const received: PositionPayload = {
       ...payload,
       receivedAt: Date.now(),

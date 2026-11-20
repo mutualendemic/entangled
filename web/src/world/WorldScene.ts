@@ -2,6 +2,8 @@ import Phaser from "phaser";
 import { AVATAR_OPTIONS, DEFAULT_AVATAR_ID, getAvatarOption } from "../avatarCatalog";
 import { POI_ICON_BY_CATEGORY, POI_ICON_NAMES } from "../poiIconCatalog";
 import { t } from "../i18n";
+import { beginPageLoad } from "../services/loading";
+import { recordClientDiagnostic } from "../services/diagnostics";
 
 export interface WorldLocation {
   name: string;
@@ -48,6 +50,8 @@ export interface RemotePlayer {
 }
 
 const PLAYER_SPEED = 80;
+const MAX_MOVEMENT_FRAME_DELTA_MS = 500;
+const REMOTE_POSITION_SMOOTHING_MS = 80;
 const AVATAR_DIRECTIONS = ["S", "SE", "E", "NE", "N", "NW", "W", "SW"] as const;
 const WORLD_CAMERA_ZOOM = 0.85;
 const TILE_SIZE_METERS = 5000;
@@ -106,6 +110,22 @@ export class WorldScene extends Phaser.Scene {
   private cursors!: Phaser.Types.Input.Keyboard.CursorKeys;
   private remotes = new Map<string, Phaser.GameObjects.Container>();
   private lastBroadcast = 0;
+  private diagnosticWindowStartedAt = 0;
+  private diagnosticLastFrameAt = 0;
+  private diagnosticFrameCount = 0;
+  private diagnosticPhaserDeltaTotalMs = 0;
+  private diagnosticPhaserDeltaMaxMs = 0;
+  private diagnosticWallDeltaTotalMs = 0;
+  private diagnosticWallDeltaMaxMs = 0;
+  private diagnosticSlowFrameCount = 0;
+  private diagnosticMovingFrameCount = 0;
+  private diagnosticJoystickFrameCount = 0;
+  private diagnosticKeyboardFrameCount = 0;
+  private diagnosticMovingWallMs = 0;
+  private diagnosticMovementDeltaTotalMs = 0;
+  private diagnosticMovementDeltaMaxMs = 0;
+  private diagnosticDistance = 0;
+  private diagnosticMaxJoystickMagnitude = 0;
   private localLastMovedAt = -Infinity;
   private localFacingX = 0;
   private localFacingY = 1;
@@ -156,6 +176,8 @@ export class WorldScene extends Phaser.Scene {
   }
 
   create(): void {
+    this.diagnosticWindowStartedAt = performance.now();
+    this.diagnosticLastFrameAt = this.diagnosticWindowStartedAt;
     this.createAvatarAnimations();
     this.cityGraphics = this.add.graphics();
     this.worldBoundary = this.add.graphics().setDepth(15);
@@ -186,19 +208,45 @@ export class WorldScene extends Phaser.Scene {
   }
 
   update(time: number, delta: number): void {
+    const diagnosticNow = performance.now();
+    const wallFrameDelta = Math.max(0, diagnosticNow - this.diagnosticLastFrameAt);
+    const movementDeltaMs = document.visibilityState === "visible" && wallFrameDelta <= MAX_MOVEMENT_FRAME_DELTA_MS
+      ? wallFrameDelta
+      : 0;
+    this.diagnosticLastFrameAt = diagnosticNow;
+    this.diagnosticFrameCount += 1;
+    this.diagnosticPhaserDeltaTotalMs += delta;
+    this.diagnosticPhaserDeltaMaxMs = Math.max(this.diagnosticPhaserDeltaMaxMs, delta);
+    this.diagnosticWallDeltaTotalMs += wallFrameDelta;
+    this.diagnosticWallDeltaMaxMs = Math.max(this.diagnosticWallDeltaMaxMs, wallFrameDelta);
+    if (wallFrameDelta > 50) this.diagnosticSlowFrameCount += 1;
+
+    const keyboardX = this.keys && this.cursors
+      ? Number(this.keys.right.isDown || this.cursors.right.isDown)
+        - Number(this.keys.left.isDown || this.cursors.left.isDown)
+      : 0;
+    const keyboardY = this.keys && this.cursors
+      ? Number(this.keys.down.isDown || this.cursors.down.isDown)
+        - Number(this.keys.up.isDown || this.cursors.up.isDown)
+      : 0;
+    const keyboardActive = keyboardX !== 0 || keyboardY !== 0;
+    const joystickMagnitude = this.touchVector.length();
+    const frameStartX = this.playerX;
+    const frameStartY = this.playerY;
     const movement = new Phaser.Math.Vector2(
-      (this.keys && this.cursors
-        ? Number(this.keys.right.isDown || this.cursors.right.isDown)
-          - Number(this.keys.left.isDown || this.cursors.left.isDown)
-        : 0) + this.touchVector.x,
-      (this.keys && this.cursors
-        ? Number(this.keys.down.isDown || this.cursors.down.isDown)
-          - Number(this.keys.up.isDown || this.cursors.up.isDown)
-        : 0) + this.touchVector.y,
+      keyboardX + this.touchVector.x,
+      keyboardY + this.touchVector.y,
     ).normalize();
     const isMoving = !this.tileTransitionPending && movement.lengthSq() > 0;
     if (isMoving) {
-      const speed = PLAYER_SPEED * (delta / 1000);
+      this.diagnosticMovingFrameCount += 1;
+      this.diagnosticMovingWallMs += wallFrameDelta;
+      this.diagnosticMovementDeltaTotalMs += movementDeltaMs;
+      this.diagnosticMovementDeltaMaxMs = Math.max(this.diagnosticMovementDeltaMaxMs, movementDeltaMs);
+      if (joystickMagnitude > 0.001) this.diagnosticJoystickFrameCount += 1;
+      if (keyboardActive) this.diagnosticKeyboardFrameCount += 1;
+      this.diagnosticMaxJoystickMagnitude = Math.max(this.diagnosticMaxJoystickMagnitude, joystickMagnitude);
+      const speed = PLAYER_SPEED * (movementDeltaMs / 1000);
       const nextX = this.playerX + movement.x * speed;
       const nextY = this.playerY + movement.y * speed;
       if (nextX < 0 || nextX >= this.world.width_m || nextY < 0 || nextY >= this.world.height_m) {
@@ -221,13 +269,23 @@ export class WorldScene extends Phaser.Scene {
       this.localFacingX = movement.x;
       this.localFacingY = movement.y;
     }
+    this.diagnosticDistance += Math.hypot(this.playerX - frameStartX, this.playerY - frameStartY);
+    this.recordMovementDiagnostics(diagnosticNow);
     this.setAvatarAnimation(
       this.player,
       isMoving || time - this.localLastMovedAt < 400,
       this.localFacingX,
       this.localFacingY,
     );
+    const interpolationDelta = Math.min(delta, 100);
+    const interpolationFactor = 1 - Math.exp(-interpolationDelta / REMOTE_POSITION_SMOOTHING_MS);
     for (const remote of this.remotes.values()) {
+      const targetX = Number(remote.getData("targetX") ?? remote.x);
+      const targetY = Number(remote.getData("targetY") ?? remote.y);
+      remote.setPosition(
+        Phaser.Math.Linear(remote.x, targetX, interpolationFactor),
+        Phaser.Math.Linear(remote.y, targetY, interpolationFactor),
+      );
       const lastMovedAt = Number(remote.getData("lastMovedAt") ?? -Infinity);
       this.setAvatarAnimation(
         remote,
@@ -237,10 +295,59 @@ export class WorldScene extends Phaser.Scene {
       );
     }
 
-    if (time - this.lastBroadcast >= 250) {
-      this.lastBroadcast = time;
+    if (diagnosticNow - this.lastBroadcast >= 250) {
+      this.lastBroadcast = diagnosticNow;
       this.events.emit("position", { x: this.playerX, y: this.playerY });
     }
+  }
+
+  private recordMovementDiagnostics(now: number): void {
+    const elapsedMs = now - this.diagnosticWindowStartedAt;
+    if (elapsedMs < 1_000) return;
+
+    const round = (value: number): number => Math.round(value * 10) / 10;
+    recordClientDiagnostic({
+      event: "client_movement_sample",
+      durationMs: round(elapsedMs),
+      updateFps: round(this.diagnosticFrameCount * 1_000 / elapsedMs),
+      averageFrameIntervalMs: round(this.diagnosticWallDeltaTotalMs / Math.max(this.diagnosticFrameCount, 1)),
+      maxFrameIntervalMs: round(this.diagnosticWallDeltaMaxMs),
+      slowFramesOver50Ms: this.diagnosticSlowFrameCount,
+      averagePhaserDeltaMs: round(this.diagnosticPhaserDeltaTotalMs / Math.max(this.diagnosticFrameCount, 1)),
+      maxPhaserDeltaMs: round(this.diagnosticPhaserDeltaMaxMs),
+      movementFrames: this.diagnosticMovingFrameCount,
+      joystickFrames: this.diagnosticJoystickFrameCount,
+      keyboardFrames: this.diagnosticKeyboardFrameCount,
+      maxJoystickMagnitude: round(this.diagnosticMaxJoystickMagnitude),
+      movingWallTimeMs: round(this.diagnosticMovingWallMs),
+      averageMovementDeltaMs: this.diagnosticMovingFrameCount
+        ? round(this.diagnosticMovementDeltaTotalMs / this.diagnosticMovingFrameCount)
+        : null,
+      maxMovementDeltaMs: round(this.diagnosticMovementDeltaMaxMs),
+      actualMovementSpeedUnitsPerSecond: this.diagnosticMovingWallMs > 0
+        ? round(this.diagnosticDistance * 1_000 / this.diagnosticMovingWallMs)
+        : null,
+      configuredPlayerSpeedUnitsPerSecond: PLAYER_SPEED,
+      cameraZoom: round(this.cameraZoom),
+      tileTransitionPending: this.tileTransitionPending,
+      visibilityState: document.visibilityState,
+    });
+
+    this.diagnosticWindowStartedAt = now;
+    this.diagnosticFrameCount = 0;
+    this.diagnosticPhaserDeltaTotalMs = 0;
+    this.diagnosticPhaserDeltaMaxMs = 0;
+    this.diagnosticWallDeltaTotalMs = 0;
+    this.diagnosticWallDeltaMaxMs = 0;
+    this.diagnosticSlowFrameCount = 0;
+    this.diagnosticMovingFrameCount = 0;
+    this.diagnosticJoystickFrameCount = 0;
+    this.diagnosticKeyboardFrameCount = 0;
+    this.diagnosticMovingWallMs = 0;
+    this.diagnosticMovementDeltaTotalMs = 0;
+    this.diagnosticMovementDeltaMaxMs = 0;
+    this.diagnosticDistance = 0;
+    this.diagnosticMaxJoystickMagnitude = 0;
   }
 
   setWorld(world: WorldData): void {
@@ -550,20 +657,22 @@ export class WorldScene extends Phaser.Scene {
     let container = this.remotes.get(remote.id);
     if (!container) {
       container = this.makePlayer(remote.username, remote.avatar);
-      container.setData("lastPositionX", remote.x).setData("lastPositionY", remote.y).setData("lastMovedAt", -Infinity);
+      container.setPosition(remote.x, remote.y);
+      container.setData("targetX", remote.x).setData("targetY", remote.y).setData("lastMovedAt", -Infinity);
       container.setData("facingX", 0).setData("facingY", 1).setData("facingDirection", "S");
       this.remotes.set(remote.id, container);
     } else {
-      const deltaX = remote.x - Number(container.getData("lastPositionX") ?? remote.x);
-      const deltaY = remote.y - Number(container.getData("lastPositionY") ?? remote.y);
+      const previousTargetX = Number(container.getData("targetX") ?? container.x);
+      const previousTargetY = Number(container.getData("targetY") ?? container.y);
+      const deltaX = remote.x - previousTargetX;
+      const deltaY = remote.y - previousTargetY;
       if (Math.hypot(deltaX, deltaY) > 0.5) {
         container.setData("lastMovedAt", this.time.now);
         container.setData("facingX", deltaX).setData("facingY", deltaY);
       }
-      container.setData("lastPositionX", remote.x).setData("lastPositionY", remote.y);
       this.updatePlayerStyle(container, AVATAR_COLORS[remote.avatar] ?? 0x79c6d4, remote.username, remote.avatar);
     }
-    container.setPosition(remote.x, remote.y);
+    container.setData("targetX", remote.x).setData("targetY", remote.y);
     container.setAlpha(remote.stale ? 0.45 : 1);
   }
 
@@ -804,11 +913,16 @@ export class WorldScene extends Phaser.Scene {
     });
     const image = new Image();
     image.crossOrigin = "anonymous";
-    await new Promise<void>((resolve, reject) => {
-      image.onload = () => resolve();
-      image.onerror = () => reject(new Error(t("Imagem de satelite indisponivel.")));
-      image.src = `${SATELLITE_EXPORT_URL}?${parameters.toString()}`;
-    });
+    const finishLoading = beginPageLoad();
+    try {
+      await new Promise<void>((resolve, reject) => {
+        image.onload = () => resolve();
+        image.onerror = () => reject(new Error(t("Imagem de satelite indisponivel.")));
+        image.src = `${SATELLITE_EXPORT_URL}?${parameters.toString()}`;
+      });
+    } finally {
+      finishLoading();
+    }
     if (!this.satelliteEnabled || requestId !== this.satelliteRequestId) {
       return;
     }
