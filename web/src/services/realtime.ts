@@ -21,8 +21,10 @@ interface PresenceMeta {
 
 interface PositionPayload extends RemotePlayer {
   sentAt: number;
+  receivedAt?: number;
 }
 
+const POSITION_STALE_AFTER_MS = 3_000;
 const SUPABASE_URL = import.meta.env.SUPABASE_URL ?? "";
 const SUPABASE_KEY = import.meta.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ?? "";
 const REALTIME_DEBUG_STORAGE_KEY = "entanglement.realtime.debug";
@@ -53,6 +55,11 @@ export class RealtimeSession {
   private client: SupabaseClient | null = null;
   private channel: RealtimeChannel | null = null;
   private refreshTimer = 0;
+  private positionHealthTimer = 0;
+  private reconnectRetryTimer = 0;
+  private reconnectAttempts = 0;
+  private lastPositionAckAt = 0;
+  private selfPositionStale = false;
   private refreshInFlight: Promise<boolean> | null = null;
   private resumeReconnectInFlight: Promise<void> | null = null;
   private lastResumeReconnectAt = 0;
@@ -71,27 +78,38 @@ export class RealtimeSession {
     private readonly onPlayerLeft: (id: string) => void,
     private readonly onMessage: (message: ChatMessage) => void,
     private readonly onStatus: (status: string) => void,
+    private readonly onSelfStale: (stale: boolean) => void,
   ) {}
 
   async start(tileX = 0, tileY = 0): Promise<void> {
     if (!SUPABASE_URL || !SUPABASE_KEY) {
       this.onStatus(t("Configure Supabase para habilitar presenca e mensagens."));
+      this.setSelfPositionStale(true);
       return;
     }
     this.client = createClient(SUPABASE_URL, SUPABASE_KEY, {
       auth: { persistSession: false, autoRefreshToken: false },
       realtime: { params: { eventsPerSecond: 8 } },
     });
-    await this.joinTile(tileX, tileY);
+    this.tileX = tileX;
+    this.tileY = tileY;
+    document.addEventListener("visibilitychange", this.refreshOnVisibility);
+    window.addEventListener("online", this.refreshOnOnline);
     this.refreshTimer = window.setInterval(() => {
       void this.refreshAccessToken();
     }, 4 * 60 * 1000);
-    document.addEventListener("visibilitychange", this.refreshOnVisibility);
-    window.addEventListener("online", this.refreshOnOnline);
+    this.positionHealthTimer = window.setInterval(() => this.checkPositionHealth(), 1_000);
+    try {
+      await this.joinTile(tileX, tileY);
+    } catch (error) {
+      this.scheduleReconnect();
+      throw error;
+    }
   }
 
-  async sendPosition(position: Omit<PositionPayload, "sentAt">, geo?: GeoPosition): Promise<void> {
-    if (!this.channel) {
+  async sendPosition(position: Omit<PositionPayload, "sentAt" | "receivedAt">, geo?: GeoPosition): Promise<void> {
+    const channel = this.channel;
+    if (!channel) {
       return;
     }
     const payload: PositionPayload = {
@@ -100,8 +118,13 @@ export class RealtimeSession {
       sentAt: Date.now(),
     };
     this.positions.set(this.user.id, payload);
-    const result = await this.channel.send({ type: "broadcast", event: "position", payload });
+    const result = await channel.send({ type: "broadcast", event: "position", payload });
+    if (this.channel === channel && result === "ok") {
+      this.lastPositionAckAt = Date.now();
+      this.setSelfPositionStale(false);
+    }
     this.reportBroadcastResult("position", result);
+    if (result !== "ok") this.scheduleReconnect();
   }
 
   async sendMessage(text: string): Promise<void> {
@@ -126,10 +149,14 @@ export class RealtimeSession {
 
   async stop(): Promise<void> {
     window.clearInterval(this.refreshTimer);
+    window.clearInterval(this.positionHealthTimer);
+    window.clearTimeout(this.reconnectRetryTimer);
+    this.reconnectRetryTimer = 0;
     document.removeEventListener("visibilitychange", this.refreshOnVisibility);
     window.removeEventListener("online", this.refreshOnOnline);
     await this.leaveTile();
     this.client = null;
+    this.setSelfPositionStale(false);
   }
 
   async leaveTile(): Promise<void> {
@@ -142,8 +169,17 @@ export class RealtimeSession {
   }
 
   async switchTile(tileX: number, tileY: number): Promise<void> {
+    window.clearTimeout(this.reconnectRetryTimer);
+    this.reconnectRetryTimer = 0;
+    this.tileX = tileX;
+    this.tileY = tileY;
     await this.leaveTile();
-    await this.joinTile(tileX, tileY);
+    try {
+      await this.joinTile(tileX, tileY);
+    } catch (error) {
+      this.scheduleReconnect();
+      throw error;
+    }
   }
 
   private logRealtimeDebug(context: Record<string, unknown>): void {
@@ -174,14 +210,55 @@ export class RealtimeSession {
     }
   }
 
-  private async reconnectAfterResume(): Promise<void> {
-    if (this.resumeReconnectInFlight || Date.now() - this.lastResumeReconnectAt < 2_000) {
-      return this.resumeReconnectInFlight ?? Promise.resolve();
+  private setSelfPositionStale(stale: boolean): void {
+    if (this.selfPositionStale === stale) return;
+    this.selfPositionStale = stale;
+    this.onSelfStale(stale);
+  }
+
+  private checkPositionHealth(): void {
+    if (!this.client) return;
+    const selfStale = !this.channel
+      || !this.lastPositionAckAt
+      || Date.now() - this.lastPositionAckAt >= POSITION_STALE_AFTER_MS;
+    this.setSelfPositionStale(selfStale);
+
+    const now = Date.now();
+    const changed: PositionPayload[] = [];
+    for (const [id, player] of this.positions) {
+      if (id === this.user.id) continue;
+      const stale = player.positionKnown === false
+        || !player.receivedAt
+        || now - player.receivedAt >= POSITION_STALE_AFTER_MS;
+      if (player.stale !== stale) {
+        const updated = { ...player, stale };
+        this.positions.set(id, updated);
+        changed.push(updated);
+      }
     }
-    const client = this.client;
-    if (!client || !this.channel) {
+    if (changed.length) this.onPlayers(changed);
+  }
+
+  private scheduleReconnect(): void {
+    if (!this.client || this.reconnectRetryTimer) return;
+    const delay = Math.min(30_000, 1_000 * (2 ** this.reconnectAttempts));
+    this.reconnectAttempts = Math.min(this.reconnectAttempts + 1, 5);
+    this.reconnectRetryTimer = window.setTimeout(() => {
+      this.reconnectRetryTimer = 0;
+      void this.reconnectAfterResume();
+    }, delay);
+  }
+
+  private async reconnectAfterResume(): Promise<void> {
+    if (this.resumeReconnectInFlight) {
+      return this.resumeReconnectInFlight;
+    }
+    if (Date.now() - this.lastResumeReconnectAt < 2_000) {
+      this.scheduleReconnect();
       return;
     }
+    const client = this.client;
+    if (!client) return;
 
     this.lastResumeReconnectAt = Date.now();
     const channel = this.channel;
@@ -190,6 +267,7 @@ export class RealtimeSession {
     const reconnect = (async () => {
       const refreshed = await this.refreshAccessToken();
       if (!refreshed || this.client !== client || this.channel !== channel) {
+        if (this.client === client) this.scheduleReconnect();
         return;
       }
 
@@ -216,6 +294,7 @@ export class RealtimeSession {
         error: error instanceof Error ? error.message : String(error),
       });
       this.onStatus(t("A reconectar ao Realtime..."));
+      this.scheduleReconnect();
     } finally {
       if (this.resumeReconnectInFlight === reconnect) {
         this.resumeReconnectInFlight = null;
@@ -320,6 +399,9 @@ export class RealtimeSession {
           this.onStatus(statusMessage);
           if (status === "SUBSCRIBED") {
             wasSubscribed = true;
+            window.clearTimeout(this.reconnectRetryTimer);
+            this.reconnectRetryTimer = 0;
+            this.reconnectAttempts = 0;
             const presence: PresenceMeta = {
               id: this.user.id,
               username: this.user.username,
@@ -372,6 +454,7 @@ export class RealtimeSession {
     }
     const state = this.channel.presenceState<PresenceMeta>();
     const online = new Set<string>();
+    const updates: PositionPayload[] = [];
     for (const metas of Object.values(state)) {
       const meta = metas[0];
       if (!meta || meta.id === this.user.id) {
@@ -387,11 +470,14 @@ export class RealtimeSession {
             avatar: meta.avatar,
             x: 0,
             y: 0,
-            sentAt: Date.now(),
+            sentAt: 0,
+            positionKnown: false,
+            stale: true,
           };
       this.positions.set(meta.id, remote);
-      this.onPlayers([remote]);
+      updates.push(remote);
     }
+    if (updates.length) this.onPlayers(updates);
     for (const id of this.positions.keys()) {
       if (id !== this.user.id && !online.has(id)) {
         this.positions.delete(id);
@@ -412,8 +498,14 @@ export class RealtimeSession {
     if (Date.now() - payload.sentAt > 15_000) {
       return;
     }
-    this.positions.set(payload.id, payload);
-    this.onPlayers([payload]);
+    const received: PositionPayload = {
+      ...payload,
+      receivedAt: Date.now(),
+      positionKnown: true,
+      stale: false,
+    };
+    this.positions.set(received.id, received);
+    this.onPlayers([received]);
   }
 
   private receiveMessage(payload: ChatMessage): void {

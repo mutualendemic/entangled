@@ -44,14 +44,14 @@ def test_registration_rejects_invalid_username_without_database():
 
     response = client.post(
         "/api/auth/register",
-        json={"username": "x", "password": "long-enough-password", "avatar": "cat-black-sleek-sitting-elegant"},
+        json={"username": "x", "password": "long-enough-password", "avatar": "cozy-chef"},
     )
 
     assert response.status_code == 400
 
 
-@pytest.mark.parametrize("avatar", ["pixel-knight", "minotaur-bull-human-axe-labyrinth"])
-def test_registration_accepts_added_avatar(monkeypatch, avatar):
+@pytest.mark.parametrize("avatar", ["pixel-knight", "cozy-chef"])
+def test_registration_accepts_animated_avatar(monkeypatch, avatar):
     inserted_users = []
 
     class FakeUsers:
@@ -73,12 +73,13 @@ def test_registration_accepts_added_avatar(monkeypatch, avatar):
     assert inserted_users[0]["avatar"] == avatar
 
 
-def test_registration_rejects_avatar_without_a_sprite_asset():
+@pytest.mark.parametrize("avatar", ["moss", "oga-34", "cat-black-sleek-sitting-elegant"])
+def test_registration_rejects_avatar_without_an_animated_sprite(avatar):
     client = create_app().test_client()
 
     response = client.post(
         "/api/auth/register",
-        json={"username": "player_1", "password": "long-enough-password", "avatar": "moss"},
+        json={"username": "player_1", "password": "long-enough-password", "avatar": avatar},
     )
 
     assert response.status_code == 400
@@ -90,18 +91,18 @@ def test_registration_rejects_short_password_without_database():
 
     response = client.post(
         "/api/auth/register",
-        json={"username": "player_1", "password": "short", "avatar": "cat-black-sleek-sitting-elegant"},
+        json={"username": "player_1", "password": "short", "avatar": "cozy-chef"},
     )
 
     assert response.status_code == 400
 
 
-def test_profile_can_change_to_cc0_avatar_and_receives_updated_token(monkeypatch):
+def test_profile_can_change_to_animated_avatar_and_receives_updated_token(monkeypatch):
     user = {
         "_id": "user-1",
         "username": "player_1",
         "username_key": "player_1",
-        "avatar": "moss",
+        "avatar": "cyberpunk-ninja",
     }
     profile = {}
 
@@ -131,15 +132,15 @@ def test_profile_can_change_to_cc0_avatar_and_receives_updated_token(monkeypatch
 
     response = app.test_client().patch(
         "/api/profiles/me",
-        json={"avatar": "oga-34"},
+        json={"avatar": "cozy-chef"},
         headers={"Authorization": f"Bearer {access_token}"},
     )
 
     assert response.status_code == 200
     result = response.get_json()
-    assert result["profile"]["avatar"] == "oga-34"
+    assert result["profile"]["avatar"] == "cozy-chef"
     refreshed_claims = jwt.decode(result["token"], app.config["JWT_SECRET"], algorithms=["HS256"])
-    assert refreshed_claims["avatar"] == "oga-34"
+    assert refreshed_claims["avatar"] == "cozy-chef"
 
 
 def test_registration_requires_jwt_secret_before_database(monkeypatch):
@@ -151,7 +152,7 @@ def test_registration_requires_jwt_secret_before_database(monkeypatch):
 
     response = client.post(
         "/api/auth/register",
-        json={"username": "player_1", "password": "long-enough-password", "avatar": "cat-black-sleek-sitting-elegant"},
+        json={"username": "player_1", "password": "long-enough-password", "avatar": "cozy-chef"},
     )
 
     assert response.status_code == 503
@@ -169,7 +170,7 @@ def test_registration_returns_service_unavailable_when_mongodb_dns_fails(monkeyp
 
     response = client.post(
         "/api/auth/register",
-        json={"username": "player_1", "password": "long-enough-password", "avatar": "cat-black-sleek-sitting-elegant"},
+        json={"username": "player_1", "password": "long-enough-password", "avatar": "cozy-chef"},
     )
 
     assert response.status_code == 503
@@ -195,7 +196,7 @@ def test_registration_explains_duplicate_username(monkeypatch):
 
     response = app.test_client().post(
         "/api/auth/register",
-        json={"username": "player_1", "password": "long-enough-password", "avatar": "cat-black-sleek-sitting-elegant"},
+        json={"username": "player_1", "password": "long-enough-password", "avatar": "cozy-chef"},
     )
 
     assert response.status_code == 409

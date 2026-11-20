@@ -1,5 +1,5 @@
 import Phaser from "phaser";
-import { AVATAR_OPTIONS, DEFAULT_AVATAR_ID, getAvatarOption } from "./avatarCatalog";
+import { AVATAR_OPTIONS, DEFAULT_AVATAR_ID, getAvatarOption, type AvatarOption } from "./avatarCatalog";
 import { apiRequest, getToken, setToken, type Profile, type User } from "./services/api";
 import { startBeaconScan } from "./services/bluetooth";
 import { distanceBetween, stopWatchingLocation, watchLocation, type GeoPosition } from "./services/location";
@@ -344,6 +344,7 @@ async function renderGame(root: HTMLElement, user: User): Promise<void> {
             <button type="button" data-panel="profile">${t("Perfil")}</button>
           </div>
           <p class="connection-status" id="connection-status">${t("Conectando...")}</p>
+          <p class="position-health" id="position-health" role="status" aria-live="polite" hidden></p>
           <section class="panel-content" data-panel-content="players">
             <div class="section-heading"><h2>${t("Por perto")}</h2><span id="player-count">${t("1 online")}</span></div>
             <div class="player-list" id="player-list"></div>
@@ -392,6 +393,7 @@ async function renderGame(root: HTMLElement, user: User): Promise<void> {
   });
 
   const remotePlayers = new Map<string, RemotePlayer>();
+  let localPositionStale = false;
   let localGeo: GeoPosition | null = null;
   let geoWatch = -1;
   let stopBleScan: (() => void) | null = null;
@@ -421,6 +423,7 @@ async function renderGame(root: HTMLElement, user: User): Promise<void> {
   const messages = root.querySelector<HTMLElement>("#message-list")!;
   const positionList = root.querySelector<HTMLElement>("#player-list")!;
   const status = root.querySelector<HTMLElement>("#connection-status")!;
+  const positionHealth = root.querySelector<HTMLElement>("#position-health")!;
   root.querySelector<HTMLButtonElement>("#download-realtime-debug")?.addEventListener("click", () => {
     if (!downloadRealtimeDebugLog()) {
       status.textContent = t("Ainda nao ha logs de Realtime para descarregar.");
@@ -461,12 +464,27 @@ async function renderGame(root: HTMLElement, user: User): Promise<void> {
     },
     (message) => appendMessage(messages, message, false),
     (text) => { status.textContent = text; },
+    (stale) => {
+      localPositionStale = stale;
+      positionHealth.hidden = !stale;
+      positionHealth.textContent = stale
+        ? t("Sua posição não está sendo confirmada. Outros jogadores podem ver uma posição antiga.")
+        : "";
+      drawPlayers();
+    },
   );
 
   function drawPlayers(): void {
     const localPosition = scene?.getLocalPosition() ?? { x: 0, y: 0 };
     const online: RemotePlayer[] = [
-      { id: user.id, username: user.username, avatar: user.avatar, ...localPosition },
+      {
+        id: user.id,
+        username: user.username,
+        avatar: user.avatar,
+        ...localPosition,
+        positionKnown: true,
+        stale: localPositionStale,
+      },
       ...Array.from(remotePlayers.values()),
     ];
     root.querySelector<HTMLElement>("#player-count")!.textContent = playersOnline(online.length);
@@ -474,21 +492,14 @@ async function renderGame(root: HTMLElement, user: User): Promise<void> {
     for (const player of online) {
       const row = document.createElement("div");
       row.className = "player-row";
+      const stale = player.id === user.id ? localPositionStale : Boolean(player.stale);
+      if (stale) row.classList.add("player-row-stale");
       const avatar = document.createElement("span");
       avatar.className = `avatar-chip avatar-${player.avatar}`;
       const avatarOption = getAvatarOption(player.avatar);
-      if (avatarOption?.sprite) {
-        avatar.classList.add("avatar-chip-sprite");
-        avatar.style.backgroundImage = `url("/sprites/${avatarOption.sprite.slug}/${avatarOption.sprite.slug}-${avatarOption.sprite.idleAction}.png")`;
-        if (avatarOption.sprite.pixelArt) avatar.classList.add("pixel-art");
-      } else if (avatarOption?.image) {
-        const image = document.createElement("img");
-        image.src = avatarOption.image;
-        image.alt = "";
-        avatar.append(image);
-      } else {
-        avatar.textContent = avatarGlyph(player.avatar);
-      }
+      avatar.classList.add("avatar-chip-sprite");
+      avatar.setAttribute("style", avatarSpriteStyle(avatarOption, "chip"));
+      if (avatarOption.sprite.pixelArt) avatar.classList.add("pixel-art");
       const info = document.createElement("span");
       info.className = "player-info";
       const name = document.createElement("strong");
@@ -496,6 +507,12 @@ async function renderGame(root: HTMLElement, user: User): Promise<void> {
       const distance = document.createElement("small");
       distance.textContent = playerDistance(player);
       info.append(name, distance);
+      if (player.id === user.id && stale) {
+        const freshness = document.createElement("small");
+        freshness.className = "player-freshness";
+        freshness.textContent = t("Posição desatualizada");
+        info.append(freshness);
+      }
       row.append(avatar, info);
       positionList.append(row);
     }
@@ -685,6 +702,8 @@ async function renderGame(root: HTMLElement, user: User): Promise<void> {
 
   function playerDistance(player: RemotePlayer): string {
     if (player.id === user.id) return localSource === "local" ? t("Posicao local") : `${localSource.toUpperCase()} ±${Math.round(localAccuracy)} m`;
+    if (player.positionKnown === false) return t("Aguardando a primeira posição");
+    if (player.stale) return t("Posição desatualizada");
     const sentAt = (player as RemotePlayer & { sentAt?: number }).sentAt;
     if (sentAt === undefined || Date.now() - sentAt > 15_000) {
       return t("GPS desatualizado");
@@ -1222,15 +1241,30 @@ function appendMessage(container: HTMLElement, message: ChatMessage, mine: boole
   container.scrollTop = container.scrollHeight;
 }
 
+function avatarSpriteStyle(avatar: AvatarOption, mode: "preview" | "chip"): string {
+  const { slug, idleAction, previewFrame: frame, previewSheet: sheet } = avatar.sprite;
+  const image = `background-image:url('/sprites/${slug}/${slug}-${idleAction}.png')`;
+  if (!frame || !sheet) {
+    return `${image};background-size:800% auto`;
+  }
+  const offsetPercent = (start: number, frameSize: number, sheetSize: number) =>
+    (-(start / frameSize) / (1 - sheetSize / frameSize)) * 100;
+  const background = [
+    image,
+    `background-size:${((sheet.w / frame.w) * 100).toFixed(2)}% auto`,
+    `background-position:${offsetPercent(frame.x, frame.w, sheet.w).toFixed(2)}% ${offsetPercent(frame.y, frame.h, sheet.h).toFixed(2)}%`,
+  ].join(";");
+  if (mode === "chip") {
+    return background;
+  }
+  return `${background};height:42px;width:auto;aspect-ratio:${frame.w} / ${frame.h}`;
+}
+
 function renderAvatarOptions(selected: string, profile = false): string {
   const selectedAvatar = getAvatarOption(selected).id;
   return AVATAR_OPTIONS.map((avatar) => {
     const dataAttribute = profile ? "data-profile-avatar" : "data-avatar";
-    const visual = avatar.sprite
-      ? `<span class="avatar-sprite-preview ${avatar.sprite.pixelArt ? "pixel-art" : ""}" style="background-image:url('/sprites/${avatar.sprite.slug}/${avatar.sprite.slug}-${avatar.sprite.idleAction}.png')" aria-hidden="true"></span>`
-      : avatar.image
-        ? `<img src="${avatar.image}" alt="" loading="lazy" />`
-        : `<span class="avatar-option-glyph">${avatarGlyph(avatar.id)}</span>`;
+    const visual = `<span class="avatar-sprite-preview ${avatar.sprite.pixelArt ? "pixel-art" : ""}" style="${avatarSpriteStyle(avatar, "preview")}" aria-hidden="true"></span>`;
     const translatedName = escapeHtml(t(avatar.name));
     return `<button type="button" class="avatar-option ${avatar.id === selectedAvatar ? "selected" : ""}" ${dataAttribute}="${avatar.id}" aria-label="${translatedName}" title="${translatedName}">${visual}<span class="avatar-option-name">${translatedName}</span></button>`;
   }).join("");
@@ -1238,19 +1272,8 @@ function renderAvatarOptions(selected: string, profile = false): string {
 
 function avatarMarkup(avatar: string): string {
   const option = getAvatarOption(avatar);
-  if (option?.sprite) {
-    const pixelArt = option.sprite.pixelArt ? " pixel-art" : "";
-    return `<span class="avatar-chip avatar-chip-sprite${pixelArt}" style="background-image:url('/sprites/${option.sprite.slug}/${option.sprite.slug}-${option.sprite.idleAction}.png')" aria-hidden="true"></span>`;
-  }
-  if (option?.image) {
-    return `<span class="avatar-chip"><img src="${option.image}" alt="" /></span>`;
-  }
-  return `<span class="avatar-chip avatar-${avatar}">${avatarGlyph(avatar)}</span>`;
-}
-
-function avatarGlyph(avatar: string): string {
-  const glyphs: Record<string, string> = { moss: "M", ember: "E", wave: "W", sun: "S", comet: "C", bloom: "B", girl8: "G" };
-  return glyphs[avatar] ?? "?";
+  const pixelArt = option.sprite.pixelArt ? " pixel-art" : "";
+  return `<span class="avatar-chip avatar-chip-sprite${pixelArt}" style="${avatarSpriteStyle(option, "chip")}" aria-hidden="true"></span>`;
 }
 
 function escapeHtml(value: string): string {

@@ -1,6 +1,5 @@
 import Phaser from "phaser";
-import { AVATAR_OPTIONS, DEFAULT_AVATAR_ID, OGA_AVATARS, getAvatarOption } from "../avatarCatalog";
-import { STATIC_AVATARS } from "../staticAvatarCatalog";
+import { AVATAR_OPTIONS, DEFAULT_AVATAR_ID, getAvatarOption } from "../avatarCatalog";
 import { POI_ICON_BY_CATEGORY, POI_ICON_NAMES } from "../poiIconCatalog";
 import { t } from "../i18n";
 
@@ -44,9 +43,12 @@ export interface RemotePlayer {
   lon?: number;
   accuracy?: number;
   source?: "gps" | "ble" | "local";
+  positionKnown?: boolean;
+  stale?: boolean;
 }
 
-const PLAYER_SPEED = 160;
+const PLAYER_SPEED = 80;
+const AVATAR_DIRECTIONS = ["S", "SE", "E", "NE", "N", "NW", "W", "SW"] as const;
 const WORLD_CAMERA_ZOOM = 0.85;
 const TILE_SIZE_METERS = 5000;
 const MAX_WORLD_CAMERA_ZOOM = 1.8;
@@ -106,6 +108,7 @@ export class WorldScene extends Phaser.Scene {
   private lastBroadcast = 0;
   private localLastMovedAt = -Infinity;
   private localFacingX = 0;
+  private localFacingY = 1;
   private touchVector = new Phaser.Math.Vector2();
   private locationObjects: Phaser.GameObjects.GameObject[] = [];
   private cityGraphics!: Phaser.GameObjects.Graphics;
@@ -140,16 +143,10 @@ export class WorldScene extends Phaser.Scene {
   }
 
   preload(): void {
-    for (const avatar of [...STATIC_AVATARS, ...OGA_AVATARS]) {
-      if (avatar.image) {
-        this.load.image(avatar.id, avatar.image);
-      }
-    }
     for (const iconName of POI_ICON_NAMES) {
       this.load.svg(`poi-icon-${iconName}`, `/poi-icons/maki/${iconName}.svg`, { width: 15, height: 15 });
     }
     for (const avatar of AVATAR_OPTIONS) {
-      if (!avatar.sprite) continue;
       for (const action of [avatar.sprite.idleAction, avatar.sprite.moveAction]) {
         const textureKey = `${avatar.id}-${action}`;
         const basePath = `/sprites/${avatar.sprite.slug}/${avatar.sprite.slug}-${action}`;
@@ -166,7 +163,7 @@ export class WorldScene extends Phaser.Scene {
     this.drawCity();
     this.drawWorldBoundary();
     this.drawLocations();
-    this.player = this.makePlayer(0x9de2b1, t("Voce"), DEFAULT_AVATAR_ID);
+    this.player = this.makePlayer(t("Voce"), DEFAULT_AVATAR_ID);
     this.playerX = this.world.width_m / 2;
     this.playerY = this.world.height_m / 2;
     this.player.setPosition(this.playerX, this.playerY);
@@ -220,11 +217,24 @@ export class WorldScene extends Phaser.Scene {
         this.player.setPosition(this.playerX, this.playerY);
       }
     }
-    if (isMoving && Math.abs(movement.x) > 0.01) this.localFacingX = movement.x;
-    this.setAvatarAnimation(this.player, isMoving || time - this.localLastMovedAt < 400, movement.x || this.localFacingX);
+    if (isMoving) {
+      this.localFacingX = movement.x;
+      this.localFacingY = movement.y;
+    }
+    this.setAvatarAnimation(
+      this.player,
+      isMoving || time - this.localLastMovedAt < 400,
+      this.localFacingX,
+      this.localFacingY,
+    );
     for (const remote of this.remotes.values()) {
       const lastMovedAt = Number(remote.getData("lastMovedAt") ?? -Infinity);
-      this.setAvatarAnimation(remote, time - lastMovedAt < 400, Number(remote.getData("facingX") ?? 0));
+      this.setAvatarAnimation(
+        remote,
+        time - lastMovedAt < 400,
+        Number(remote.getData("facingX") ?? 0),
+        Number(remote.getData("facingY") ?? 1),
+      );
     }
 
     if (time - this.lastBroadcast >= 250) {
@@ -525,29 +535,36 @@ export class WorldScene extends Phaser.Scene {
     [this.playerX, this.playerY] = this.nearestWalkablePosition(x, y);
     this.player.setPosition(this.playerX, this.playerY);
     const deltaX = this.playerX - previousX;
-    if (Math.hypot(deltaX, this.playerY - previousY) > 0.5) {
+    const deltaY = this.playerY - previousY;
+    if (Math.hypot(deltaX, deltaY) > 0.5) {
       this.localLastMovedAt = this.time.now;
-      if (Math.abs(deltaX) > 0.01) this.localFacingX = deltaX;
+      this.localFacingX = deltaX;
+      this.localFacingY = deltaY;
     }
   }
 
   updateRemotePlayer(remote: RemotePlayer): void {
+    if (remote.positionKnown === false) {
+      return;
+    }
     let container = this.remotes.get(remote.id);
     if (!container) {
-      container = this.makePlayer(AVATAR_COLORS[remote.avatar] ?? 0x79c6d4, remote.username, remote.avatar);
+      container = this.makePlayer(remote.username, remote.avatar);
       container.setData("lastPositionX", remote.x).setData("lastPositionY", remote.y).setData("lastMovedAt", -Infinity);
+      container.setData("facingX", 0).setData("facingY", 1).setData("facingDirection", "S");
       this.remotes.set(remote.id, container);
     } else {
       const deltaX = remote.x - Number(container.getData("lastPositionX") ?? remote.x);
       const deltaY = remote.y - Number(container.getData("lastPositionY") ?? remote.y);
       if (Math.hypot(deltaX, deltaY) > 0.5) {
         container.setData("lastMovedAt", this.time.now);
-        if (Math.abs(deltaX) > 0.01) container.setData("facingX", deltaX);
+        container.setData("facingX", deltaX).setData("facingY", deltaY);
       }
       container.setData("lastPositionX", remote.x).setData("lastPositionY", remote.y);
       this.updatePlayerStyle(container, AVATAR_COLORS[remote.avatar] ?? 0x79c6d4, remote.username, remote.avatar);
     }
     container.setPosition(remote.x, remote.y);
+    container.setAlpha(remote.stale ? 0.45 : 1);
   }
 
   removeRemotePlayer(id: string): void {
@@ -555,8 +572,8 @@ export class WorldScene extends Phaser.Scene {
     this.remotes.delete(id);
   }
 
-  private makePlayer(color: number, label: string, avatar: string): Phaser.GameObjects.Container {
-    const visual = this.makeAvatarVisual(color, avatar);
+  private makePlayer(label: string, avatar: string): Phaser.GameObjects.Container {
+    const visual = this.makeAvatarVisual(avatar);
     const name = this.add.text(0, 13, label, {
       color: "#edf5e9",
       fontFamily: "Manrope, sans-serif",
@@ -564,26 +581,24 @@ export class WorldScene extends Phaser.Scene {
       stroke: "#101a18",
       strokeThickness: 3,
     }).setOrigin(0.5, 0);
-    return this.add.container(0, 0, [visual, name]).setData("avatar", avatar).setDepth(30);
+    return this.add.container(0, 0, [visual, name])
+      .setData("avatar", avatar)
+      .setData("facingDirection", "S")
+      .setDepth(30);
   }
 
-  private makeAvatarVisual(color: number, avatar: string): Phaser.GameObjects.GameObject {
+  private makeAvatarVisual(avatar: string): Phaser.GameObjects.GameObject {
     const option = getAvatarOption(avatar);
-    if (option?.sprite) {
-      const { slug, idleAction } = option.sprite;
-      const sprite = this.add.sprite(0, 0, `${option.id}-${idleAction}`, `${slug}-${idleAction}-00`);
-      sprite.setScale(0.14).setOrigin(0.5, 0.875).setDepth(1);
-      sprite.play(`${option.id}-idle`);
-      return sprite;
-    }
-    if (option?.image && this.textures.exists(option.id)) {
-      const sprite = this.add.image(0, 0, option.id);
-      const frame = sprite.frame;
-      const scale = 28 / Math.max(frame.width, frame.height);
-      sprite.setScale(scale).setOrigin(0.5).setDepth(1);
-      return sprite;
-    }
-    return this.add.circle(0, 0, 11, color).setStrokeStyle(2, 0xf2f7da);
+    const { slug, idleAction, directional, pivot } = option.sprite;
+    const textureKey = `${option.id}-${idleAction}`;
+    const frameName = directional
+      ? `${idleAction}_S_00`
+      : `${slug}-${idleAction}-00`;
+    const sprite = this.add.sprite(0, 0, textureKey, frameName);
+    const scale = 36 / sprite.frame.height;
+    sprite.setScale(scale).setOrigin(pivot?.x ?? 0.5, pivot?.y ?? 0.875).setDepth(1);
+    sprite.play(directional ? `${option.id}-idle-S` : `${option.id}-idle`);
+    return sprite;
   }
 
   private updatePlayerStyle(container: Phaser.GameObjects.Container, color: number, label: string, avatar: string): void {
@@ -591,7 +606,7 @@ export class WorldScene extends Phaser.Scene {
       const previousVisual = container.getAt(0);
       container.remove(previousVisual, false);
       previousVisual.destroy();
-      container.addAt(this.makeAvatarVisual(color, avatar), 0);
+      container.addAt(this.makeAvatarVisual(avatar), 0);
       container.setData("avatar", avatar);
     } else if (container.getAt(0) instanceof Phaser.GameObjects.Arc) {
       (container.getAt(0) as Phaser.GameObjects.Arc).setFillStyle(color);
@@ -603,7 +618,6 @@ export class WorldScene extends Phaser.Scene {
   private createAvatarAnimations(): void {
     for (const avatar of AVATAR_OPTIONS) {
       const config = avatar.sprite;
-      if (!config) continue;
       for (const [state, action, frameRate] of [
         ["idle", config.idleAction, config.idleFps],
         ["walk", config.moveAction, config.moveFps],
@@ -611,28 +625,56 @@ export class WorldScene extends Phaser.Scene {
         const textureKey = `${avatar.id}-${action}`;
         const texture = this.textures.get(textureKey);
         if (config.pixelArt) texture.setFilter(Phaser.Textures.FilterMode.NEAREST);
-        const framePrefix = `${config.slug}-${action}-`;
-        const frames = texture.getFrameNames()
-          .filter((frame) => frame.startsWith(framePrefix))
-          .sort((first, second) => first.localeCompare(second, undefined, { numeric: true }))
-          .map((frame) => ({ key: textureKey, frame }));
-        if (frames.length > 0) {
-          this.anims.create({ key: `${avatar.id}-${state}`, frames, frameRate, repeat: -1 });
+        const directions: Array<string | null> = config.directional ? [...AVATAR_DIRECTIONS] : [null];
+        for (const direction of directions) {
+          const framePrefix = direction
+            ? `${action}_${direction}_`
+            : `${config.slug}-${action}-`;
+          const excludedFrames = new Set(config.excludedFrames?.[action] ?? []);
+          const frames = texture.getFrameNames()
+            .filter((frame) => frame.startsWith(framePrefix))
+            .filter((frame) => !excludedFrames.has(Number(frame.slice(framePrefix.length))))
+            .sort((first, second) => first.localeCompare(second, undefined, { numeric: true }))
+            .map((frame) => ({ key: textureKey, frame }));
+          if (frames.length > 0) {
+            const animationKey = direction ? `${avatar.id}-${state}-${direction}` : `${avatar.id}-${state}`;
+            this.anims.create({ key: animationKey, frames, frameRate, repeat: -1 });
+          }
         }
       }
     }
   }
 
-  private setAvatarAnimation(container: Phaser.GameObjects.Container, moving: boolean, directionX: number): void {
+  private avatarDirection(directionX: number, directionY: number): string {
+    if (Math.hypot(directionX, directionY) < 0.01) return "S";
+    const angle = (Math.atan2(directionY, directionX) + Math.PI * 2) % (Math.PI * 2);
+    const directionIndex = Math.round(angle / (Math.PI / 4)) % AVATAR_DIRECTIONS.length;
+    const clockwiseDirections = ["E", "SE", "S", "SW", "W", "NW", "N", "NE"];
+    return clockwiseDirections[directionIndex];
+  }
+
+  private setAvatarAnimation(
+    container: Phaser.GameObjects.Container,
+    moving: boolean,
+    directionX: number,
+    directionY: number,
+  ): void {
     const avatar = getAvatarOption(String(container.getData("avatar") ?? ""));
-    const config = avatar?.sprite;
+    const config = avatar.sprite;
     const sprite = container.getAt(0);
-    if (!config || !(sprite instanceof Phaser.GameObjects.Sprite)) return;
+    if (!(sprite instanceof Phaser.GameObjects.Sprite)) return;
 
     const state = moving ? "walk" : "idle";
-    const animationKey = `${avatar.id}-${state}`;
+    let animationKey = `${avatar.id}-${state}`;
+    if (config.directional) {
+      if (Math.hypot(directionX, directionY) >= 0.01) {
+        container.setData("facingDirection", this.avatarDirection(directionX, directionY));
+      }
+      const direction = String(container.getData("facingDirection") ?? "S");
+      animationKey = `${avatar.id}-${state}-${direction}`;
+    }
     if (sprite.anims.currentAnim?.key !== animationKey) sprite.play(animationKey, true);
-    if (Math.abs(directionX) > 0.01) {
+    if (!config.directional && Math.abs(directionX) > 0.01) {
       sprite.setFlipX((config.facing === "right" && directionX < 0) || (config.facing === "left" && directionX > 0));
     }
   }

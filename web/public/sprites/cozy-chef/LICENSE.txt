@@ -1,0 +1,20 @@
+dotPLAYS Asset License
+Copyright (c) 2026 dotPLAYS (https://dotplays.com)
+
+When you buy or download this pack you may:
+- Use the assets in any number of your own games, apps, videos, prototypes and other projects, free or commercial.
+- Modify, recolour, crop, scale and combine the assets with other assets.
+- Use the assets in projects you build for a client.
+- Credit is welcome but not required.
+
+You may not:
+- Resell, share or give away the assets themselves, on their own or in another asset pack, template or collection,
+  even if they are modified.
+- Upload the assets as stock content or as NFTs.
+- Use the assets as training data for machine-learning models.
+- Use the assets, or modified versions of them, as a logo or trademark.
+
+The assets are provided "as is", without warranty of any kind.
+
+AI disclosure: this art was made with the help of generative AI tools and then cut, cleaned, rigged and animated by hand
+and in code by dotPLAYS.
